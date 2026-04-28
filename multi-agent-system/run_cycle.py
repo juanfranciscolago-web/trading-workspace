@@ -1,6 +1,11 @@
 #!/usr/bin/env python
 """
-run_cycle.py — Drive one trade cycle through the mock agent system.
+run_cycle.py — Drive one trade cycle through the mock agent system (SYNC).
+
+.. deprecated::
+    Usar run_async_cycle.py para el flujo async con ATLAS real.
+    Este script mantiene el orchestrator sincrónico con mock agents — útil
+    para testing rápido sin Redis ni DB completa.
 
 Usage:
     python run_cycle.py --scenario all_agree
@@ -25,7 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from multi_agent.agents import SCENARIOS, build_orchestrator
 from multi_agent.agents.base import CycleResult
-from multi_agent.communication.enums import AtlasDecision, DecisionOutcome
+from multi_agent.communication.enums import DecisionOutcome
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -57,13 +62,6 @@ def _outcome_icon(outcome: DecisionOutcome) -> str:
         DecisionOutcome.BLOCKED: "🚫 BLOCKED",
     }.get(outcome, str(outcome))
 
-
-def _atlas_icon(decision: AtlasDecision) -> str:
-    return {
-        AtlasDecision.APPROVED: "✓ APPROVED",
-        AtlasDecision.APPROVED_WITH_CONDITIONS: "⚡ APPROVED WITH CONDITIONS",
-        AtlasDecision.BLOCKED: "🚫 BLOCKED",
-    }.get(decision, str(decision))
 
 
 def print_result(result: CycleResult) -> None:
@@ -108,28 +106,26 @@ def print_result(result: CycleResult) -> None:
     for cond in d.conditions:
         print(f"  cond:     {cond}")
 
-    print(f"\n[ATLAS]  {_atlas_icon(a.decision)}  risk_mode={a.risk_mode.value}")
-    pi = a.portfolio_impact
-    print(f"  buying power used: {pi.current_state.buying_power_used_pct:.1f}% "
-          f"→ {pi.post_trade_state.buying_power_used_pct:.1f}%")
-    print(f"  tech concentration: {pi.current_state.tech_concentration_pct:.1f}% "
-          f"→ {pi.post_trade_state.tech_concentration_pct:.1f}%")
-    for mod in a.modulations_applied:
-        print(f"  note:    {mod}")
+    atlas_status = "✓ APPROVED" if a.approved else f"✗ REJECTED ({a.reason})"
+    print(f"\n[ATLAS]  {atlas_status}  risk_mode={a.risk_mode.value}")
+    print(f"  executed_size: {float(a.executed_size):.2f}%  (original: {float(a.original_size):.2f}%)")
+    print(f"  version: {a.atlas_version}  eval_ms: {a.evaluation_time_ms:.1f}")
+    if a.checks_failed:
+        print(f"  failed:  {', '.join(a.checks_failed)}")
+    if a.checks_passed:
+        print(f"  passed:  {', '.join(a.checks_passed)}")
+    bp = a.metrics_snapshot.get("exposure.post_trade_bp_pct") or a.metrics_snapshot.get("portfolio.buying_power_used_pct")
+    if bp:
+        print(f"  buying power post: {bp:.1f}%")
 
     # Final verdict
     print(f"\n{'─'*60}")
-    if a.decision == AtlasDecision.BLOCKED:
-        print("  FINAL: TRADE BLOCKED by ATLAS")
+    if not a.approved:
+        print(f"  FINAL: TRADE REJECTED by ATLAS — {a.reason}")
     elif d.outcome in (DecisionOutcome.REJECTED, DecisionOutcome.DEFERRED):
         print(f"  FINAL: TRADE {d.outcome.value} — not sent to execution")
     else:
-        final_pct = (
-            d.size_modulation.approved_size_pct
-            if d.size_modulation
-            else p.sizing.proposed_size_pct_portfolio
-        )
-        print(f"  FINAL: PROCEED TO EXECUTION at {final_pct:.1f}% portfolio")
+        print(f"  FINAL: PROCEED TO EXECUTION at {float(a.executed_size):.2f}% portfolio")
     print(f"{'='*60}\n")
 
 

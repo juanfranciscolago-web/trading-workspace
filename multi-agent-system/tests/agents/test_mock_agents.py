@@ -21,7 +21,6 @@ from multi_agent.agents import (
 from multi_agent.agents import SCENARIOS
 from multi_agent.communication.enums import (
     AgentId,
-    AtlasDecision,
     DecisionOutcome,
     RiskMode,
     Stance,
@@ -179,7 +178,7 @@ class TestAtlasMock:
         proposal = AthenaMock().generate_proposal(scenario, rng, corr)
         decision = self._make_decision(DecisionOutcome.APPROVED)
         result = agent.validate(proposal, decision, scenario, rng, corr)
-        assert result.decision == AtlasDecision.APPROVED
+        assert result.approved is True
 
     def test_blocks_when_scenario_atlas_blocks(self):
         scenario = SCENARIOS["atlas_blocks"]
@@ -189,9 +188,9 @@ class TestAtlasMock:
         proposal = AthenaMock().generate_proposal(scenario, rng, corr)
         decision = self._make_decision(DecisionOutcome.APPROVED)
         result = agent.validate(proposal, decision, scenario, rng, corr)
-        assert result.decision == AtlasDecision.BLOCKED
+        assert result.approved is False
 
-    def test_risk_mode_yellow_when_blocking(self):
+    def test_risk_mode_black_when_blocking(self):
         scenario = SCENARIOS["atlas_blocks"]
         agent = AtlasMock()
         rng = random.Random(42)
@@ -199,7 +198,7 @@ class TestAtlasMock:
         proposal = AthenaMock().generate_proposal(scenario, rng, corr)
         decision = self._make_decision(DecisionOutcome.APPROVED)
         result = agent.validate(proposal, decision, scenario, rng, corr)
-        assert result.risk_mode == RiskMode.YELLOW
+        assert result.risk_mode == RiskMode.BLACK
 
     def test_risk_mode_green_when_not_blocking(self):
         scenario = SCENARIOS["all_agree"]
@@ -211,7 +210,7 @@ class TestAtlasMock:
         result = agent.validate(proposal, decision, scenario, rng, corr)
         assert result.risk_mode == RiskMode.GREEN
 
-    def test_stress_tests_have_three_scenarios(self):
+    def test_stress_tests_in_metrics_snapshot(self):
         scenario = SCENARIOS["all_agree"]
         agent = AtlasMock()
         rng = random.Random(42)
@@ -219,7 +218,8 @@ class TestAtlasMock:
         proposal = AthenaMock().generate_proposal(scenario, rng, corr)
         decision = self._make_decision(DecisionOutcome.APPROVED)
         result = agent.validate(proposal, decision, scenario, rng, corr)
-        assert len(result.stress_test_results) == 3
+        assert "stress.spx_down_5pct" in result.metrics_snapshot
+        assert "stress.vix_spike_30pct" in result.metrics_snapshot
 
     def test_correlation_id_propagated(self):
         scenario = SCENARIOS["all_agree"]

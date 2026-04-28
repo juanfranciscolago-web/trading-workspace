@@ -16,6 +16,9 @@ from uuid import UUID
 
 import psycopg2.extras
 
+import json as _json
+from datetime import datetime, timezone
+
 from multi_agent.communication.schemas import (
     AtlasValidationMessage,
     CritiqueMessage,
@@ -171,6 +174,7 @@ class MessageRepository:
         msg: AtlasValidationMessage,
         channel: str = "agent.atlas_validations",
     ) -> None:
+        payload_json = self._to_json(msg)
         with self._pool.connection() as conn:
             try:
                 with conn.cursor() as cur:
@@ -179,26 +183,141 @@ class MessageRepository:
                         """
                         INSERT INTO trades.atlas_validations
                             (correlation_id, atlas_decision, risk_mode,
-                             buying_power_used_pct, full_payload)
-                        VALUES (%s, %s, %s, %s, %s)
+                             full_payload,
+                             approved, executed_size_pct, original_size_pct,
+                             reason, atlas_version, portfolio_snapshot_id,
+                             evaluation_time_ms, checks_passed, checks_failed,
+                             metrics_snapshot)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             msg.correlation_id,
-                            msg.decision.value,
+                            # deprecated columns — keep populated for backward compat
+                            "APPROVED" if msg.approved else "BLOCKED",
                             msg.risk_mode.value,
-                            msg.portfolio_impact.current_state.buying_power_used_pct,
-                            self._to_json(msg),
+                            payload_json,
+                            # new columns
+                            msg.approved,
+                            float(msg.executed_size),
+                            float(msg.original_size),
+                            msg.reason,
+                            msg.atlas_version,
+                            msg.portfolio_snapshot_id,
+                            msg.evaluation_time_ms,
+                            msg.checks_passed or [],
+                            msg.checks_failed or [],
+                            _json.dumps(msg.metrics_snapshot),
                         ),
+                    )
+                    # Fix tech debt: update decision atlas_validated_at
+                    cur.execute(
+                        """
+                        UPDATE trades.decisions
+                           SET atlas_validated_at = %s
+                         WHERE correlation_id = %s
+                           AND atlas_validated_at IS NULL
+                        """,
+                        (datetime.now(timezone.utc), msg.correlation_id),
                     )
                 conn.commit()
             except Exception:
                 conn.rollback()
                 raise
         logger.info(
-            "Saved atlas_validation %s (decision=%s)",
+            "Saved atlas_validation %s (approved=%s reason=%s)",
             msg.message_id,
-            msg.decision,
+            msg.approved,
+            msg.reason,
         )
+
+    def save_atlas_snapshot(
+        self,
+        snapshot_id: str,
+        snapshot_at,
+        nav_usd: float,
+        cash_usd: float,
+        buying_power_used_pct: float,
+        portfolio_beta: float,
+        vega_total: float,
+        pnl_daily_usd: float,
+        drawdown_from_peak_pct: float,
+        positions: list,
+    ) -> None:
+        """Persist the portfolio snapshot used for an ATLAS validation."""
+        with self._pool.connection() as conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO atlas.portfolio_snapshots
+                            (snapshot_id, snapshot_at, nav_usd, cash_usd,
+                             buying_power_used_pct, portfolio_beta, vega_total,
+                             pnl_daily_usd, drawdown_from_peak_pct,
+                             open_positions_count, positions_json)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (snapshot_id) DO NOTHING
+                        """,
+                        (
+                            snapshot_id,
+                            snapshot_at,
+                            nav_usd,
+                            cash_usd,
+                            buying_power_used_pct,
+                            portfolio_beta,
+                            vega_total,
+                            pnl_daily_usd,
+                            drawdown_from_peak_pct,
+                            len(positions),
+                            _json.dumps(positions),
+                        ),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    def save_rejected_dlq(
+        self,
+        *,
+        source: str,
+        correlation_id,
+        ticker: str | None,
+        proposing_agent: str | None,
+        reason: str,
+        original_channel: str | None,
+        dlq_entry_id: str | None,
+        payload: dict,
+        atlas_version: str | None = None,
+    ) -> None:
+        """Record a rejected or DLQ'd trade for human review."""
+        with self._pool.connection() as conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO trades.rejected_dlq
+                            (source, correlation_id, ticker, proposing_agent,
+                             reason, original_channel, dlq_entry_id,
+                             payload, atlas_version)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            source,
+                            correlation_id,
+                            ticker,
+                            proposing_agent,
+                            reason,
+                            original_channel,
+                            dlq_entry_id,
+                            _json.dumps(payload),
+                            atlas_version,
+                        ),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        logger.info("Saved rejected_dlq (source=%s reason=%s)", source, reason)
 
     def log_llm_cost(
         self,

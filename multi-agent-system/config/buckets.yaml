@@ -1,0 +1,36 @@
+# ATLAS Bucket / Sector Definitions — Sprint 2A (estáticos)
+# Cada bucket define un grupo de activos correlacionados.
+# Tickers no listados van al bucket "other" (sin límite especial de sector,
+# solo aplica el límite de single_name).
+#
+# Modificar acá agrega/mueve tickers sin tocar código.
+# Sprint 3+: source dinámico desde market data / correlation matrix.
+
+buckets:
+  tech_mega_cap:
+    description: "Mega-cap tech — alta correlación entre sí"
+    tickers: [MSFT, GOOGL, GOOG, AAPL, AMZN, META]
+
+  semis:
+    description: "Semiconductores y ETFs relacionados"
+    tickers: [NVDA, AMD, TSM, AVGO, QCOM, MU, SMH, SOXL, SOXS]
+
+  crypto_correlated:
+    description: "Activos con alta correlación a BTC/ETH"
+    tickers: [COIN, MSTR, RIOT, MARA, HOOD, CLSK, BTC, ETH, SOL]
+
+  energy:
+    description: "Energía — incluye E&P latinoamericanas"
+    tickers: [XLE, XOM, CVX, VIST, PAM, YPF, TGS, SLB, HAL]
+
+  defensives:
+    description: "Activos defensivos y de cobertura"
+    tickers: [XLU, XLP, GLD, TLT, USMV, SPLV, VIG]
+
+  broad_market:
+    description: "ETFs de mercado amplio — alta correlación a SPX"
+    tickers: [SPY, QQQ, IWM, XLK, XLV, XLF, XLI, VTI, VOO, IVV]
+
+  other:
+    description: "Tickers no clasificados — sin límite de sector"
+    tickers: []

@@ -1,0 +1,38 @@
+# ATLAS Risk Limits — Phase 1 (Paper Trading, primeros 6 meses)
+# Editar aquí para ajustar calibración sin tocar código.
+# Todos los valores en porcentaje del NAV salvo que se indique otra unidad.
+
+phase: 1
+description: "Paper trading — límites estrictos para forzar disciplina"
+
+# ── PnL Halts ────────────────────────────────────────────────────────────────
+pnl:
+  daily_halt_pct: -2.5        # halt 24h si pérdida diaria supera este %
+  weekly_halt_pct: -4.0       # pause 48h si pérdida semanal supera este %
+  monthly_size_reduction_pct: -7.0  # size 50% siguiente mes
+  drawdown_halt_pct: -12.0    # size 25% — umbral de alerta estructural
+  drawdown_kill_switch_pct: -25.0   # halt completo absoluto
+  daily_loss_kill_switch_pct: -8.0  # halt completo si se pierde >8% en un día
+
+# ── Exposure Limits ──────────────────────────────────────────────────────────
+exposure:
+  single_name_max_pct: 8.0    # máximo para cualquier ticker individual
+  sector_max_pct: 30.0        # máximo para cualquier bucket/sector
+  bucket_max_pct: 45.0        # cap absoluto por bucket (defensa en profundidad)
+  beta_min: -0.3              # beta neto mínimo del portfolio
+  beta_max: 1.3               # beta neto máximo del portfolio
+
+# ── Greeks ───────────────────────────────────────────────────────────────────
+greeks:
+  vega_limit_pct_per_vix_point: 3.0  # max pérdida como % NAV por punto VIX
+  # gamma_short_max_loss_pct: 2.0   # Sprint 3+ cuando haya Greeks reales
+
+# ── Buying Power ─────────────────────────────────────────────────────────────
+buying_power:
+  normal_max_pct: 40.0         # uso máximo normal
+  macro_event_max_pct: 25.0    # FOMC, NFP, CPI — límite reducido
+  # macro_event detection: Sprint 3+ (calendar integration)
+
+# ── Liquidity ────────────────────────────────────────────────────────────────
+liquidity:
+  max_illiquid_pct: 15.0       # max % en posiciones con >3 días al 30% ADV

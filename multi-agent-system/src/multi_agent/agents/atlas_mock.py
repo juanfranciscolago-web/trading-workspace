@@ -1,9 +1,12 @@
 """
 ATLAS mock — portfolio guardian / risk validator.
 
-Validates the consensus decision against mock portfolio state.
-In the atlas_blocks scenario, sets AtlasDecision.BLOCKED regardless
-of the consensus outcome.
+Sprint 2A: devuelve AtlasValidationMessage con el nuevo contrato
+(approved: bool, executed_size, checks_passed/failed, metrics_snapshot).
+
+Lógica simplificada para tests del orchestrator:
+- Escenario atlas_blocks → approved=False, reason=REJECTED_KILL_SWITCH
+- Cualquier otro → approved=True con executed_size = proposed_size (o reducido)
 """
 from __future__ import annotations
 
@@ -11,26 +14,22 @@ import random
 from decimal import Decimal
 from uuid import UUID
 
-from multi_agent.communication.enums import AgentId, AtlasDecision, DecisionOutcome, RiskMode
+from multi_agent.communication.enums import AgentId, AtlasReason, RiskMode
 from multi_agent.communication.schemas import (
     AtlasValidationMessage,
     DecisionMessage,
-    LimitDistances,
-    PortfolioImpact,
-    PortfolioState,
     ProposalMessage,
-    StressTestResult,
 )
 
 from .base import BaseMockAgent
 from .fixtures import ScenarioDef
 
-# Static mock portfolio baseline
+_ATLAS_VERSION = "atlas-mock-1.0"
+_NAV_USD = Decimal("1000000.00")
 _BASE_BETA = 0.82
-_BASE_TECH_CONCENTRATION = 38.5
-_BASE_VEGA_TOTAL = 12_400.0
+_BASE_VEGA = -12400.0
+_BASE_BP_PCT = 22.0
 _BASE_DRAWDOWN = -2.1
-_BASE_BUYING_POWER_USED = 22.0
 
 
 class AtlasMock(BaseMockAgent):
@@ -44,88 +43,94 @@ class AtlasMock(BaseMockAgent):
         rng: random.Random,
         correlation_id: UUID,
     ) -> AtlasValidationMessage:
-        # ── determine risk mode ────────────────────────────────────────────────
+        proposed_size = Decimal(str(proposal.sizing.proposed_size_pct_portfolio))
+
         if scenario.atlas_block:
-            risk_mode = RiskMode.YELLOW
-            atlas_decision = AtlasDecision.BLOCKED
-            modulations = [scenario.atlas_block_reason]
-            buying_power_post = scenario.buying_power_used_pct + float(
-                proposal.sizing.proposed_size_pct_portfolio
-            )
-            tech_conc_post = _BASE_TECH_CONCENTRATION + float(
-                proposal.sizing.proposed_size_pct_portfolio
-            )
-        else:
-            risk_mode = RiskMode.GREEN
-            buying_power_post = _BASE_BUYING_POWER_USED + float(
-                proposal.sizing.proposed_size_pct_portfolio
-            )
-            tech_conc_post = _BASE_TECH_CONCENTRATION + float(
-                proposal.sizing.proposed_size_pct_portfolio * 0.6
-            )
-            modulations = []
+            return self._build_blocked(proposal, decision, scenario, correlation_id, proposed_size)
 
-            if decision.outcome == DecisionOutcome.APPROVED:
-                atlas_decision = AtlasDecision.APPROVED
-            else:
-                atlas_decision = AtlasDecision.APPROVED_WITH_CONDITIONS
-                if decision.size_modulation:
-                    modulations.append(
-                        f"Size validated at {decision.size_modulation.approved_size_pct:.1f}%"
-                    )
+        return self._build_approved(proposal, decision, rng, correlation_id, proposed_size)
 
-        current_state = PortfolioState(
-            portfolio_beta=_BASE_BETA,
-            tech_concentration_pct=_BASE_TECH_CONCENTRATION,
-            vega_total=_BASE_VEGA_TOTAL,
-            drawdown_from_peak_pct=_BASE_DRAWDOWN,
-            buying_power_used_pct=_BASE_BUYING_POWER_USED,
-        )
-        post_state = PortfolioState(
-            portfolio_beta=round(_BASE_BETA + rng.uniform(0.01, 0.05), 4),
-            tech_concentration_pct=round(tech_conc_post, 2),
-            vega_total=_BASE_VEGA_TOTAL + rng.uniform(800, 2000),
-            drawdown_from_peak_pct=_BASE_DRAWDOWN,
-            buying_power_used_pct=round(min(buying_power_post, 95.0), 2),
-        )
-        limit_distances = LimitDistances(
-            tech_concentration_limit=45.0,
-            distance_to_limit_pct=round(45.0 - post_state.tech_concentration_pct, 2),
-            vega_limit=50_000.0,
-            distance_to_vega_limit_pct=round(
-                (50_000.0 - post_state.vega_total) / 50_000.0 * 100, 2
-            ),
-        )
+    def _build_approved(
+        self,
+        proposal: ProposalMessage,
+        decision: DecisionMessage,
+        rng: random.Random,
+        correlation_id: UUID,
+        proposed_size: Decimal,
+    ) -> AtlasValidationMessage:
+        post_bp = _BASE_BP_PCT + float(proposed_size)
+        post_beta = round(_BASE_BETA + rng.uniform(0.01, 0.05), 4)
 
-        stress_tests = [
-            StressTestResult(
-                scenario="market_down_5pct",
-                projected_pl_usd=round(-float(proposal.sizing.proposed_size_usd) * 0.08, 2),
-                projected_pl_pct=round(-0.08, 4),
-            ),
-            StressTestResult(
-                scenario="iv_spike_30pct",
-                projected_pl_usd=round(-float(proposal.sizing.proposed_size_usd) * 0.12, 2),
-                projected_pl_pct=round(-0.12, 4),
-            ),
-            StressTestResult(
-                scenario="black_swan_down_15pct",
-                projected_pl_usd=round(-float(proposal.sizing.proposed_size_usd) * 0.25, 2),
-                projected_pl_pct=round(-0.25, 4),
-            ),
-        ]
+        metrics = {
+            "portfolio.beta_current": _BASE_BETA,
+            "portfolio.beta_post": post_beta,
+            "portfolio.vega_total_current": _BASE_VEGA,
+            "portfolio.buying_power_used_pct": _BASE_BP_PCT,
+            "portfolio.drawdown_from_peak_pct": _BASE_DRAWDOWN,
+            "portfolio.risk_mode": "GREEN",
+            "exposure.post_trade_bp_pct": round(post_bp, 2),
+            "stress.spx_down_5pct": {
+                "impact_usd": round(-float(_NAV_USD) * _BASE_BETA * 0.05, 2),
+                "impact_pct": round(-_BASE_BETA * 5.0, 4),
+            },
+            "stress.vix_spike_30pct": {
+                "impact_usd": round(_BASE_VEGA * 30, 2),
+                "impact_pct": round(_BASE_VEGA * 30 / float(_NAV_USD) * 100, 4),
+            },
+        }
 
         return AtlasValidationMessage(
             agent_id=AgentId.ATLAS,
             correlation_id=correlation_id,
             parent_message_id=decision.message_id,
-            decision=atlas_decision,
-            portfolio_impact=PortfolioImpact(
-                current_state=current_state,
-                post_trade_state=post_state,
-                limit_distances=limit_distances,
-            ),
-            stress_test_results=stress_tests,
-            modulations_applied=modulations,
-            risk_mode=risk_mode,
+            atlas_version=_ATLAS_VERSION,
+            approved=True,
+            executed_size=proposed_size,
+            original_size=proposed_size,
+            reason=AtlasReason.APPROVED,
+            risk_mode=RiskMode.GREEN,
+            checks_passed=[
+                "kill_switches", "pnl_halt", "buying_power",
+                "single_name", "sector_saturation", "bucket_saturation", "beta",
+            ],
+            checks_failed=[],
+            metrics_snapshot=metrics,
+            portfolio_snapshot_id="mock-snapshot-" + str(correlation_id)[:8],
+            evaluation_time_ms=round(rng.uniform(1.0, 5.0), 3),
+        )
+
+    def _build_blocked(
+        self,
+        proposal: ProposalMessage,
+        decision: DecisionMessage,
+        scenario: ScenarioDef,
+        correlation_id: UUID,
+        proposed_size: Decimal,
+    ) -> AtlasValidationMessage:
+        block_reason = scenario.atlas_block_reason or AtlasReason.REJECTED_KILL_SWITCH
+
+        metrics = {
+            "portfolio.drawdown_from_peak_pct": -26.0,  # past kill switch
+            "portfolio.pnl_daily_pct": -9.0,
+            "portfolio.risk_mode": "BLACK",
+            "limits.drawdown_kill_switch_pct": -25.0,
+            "stress.spx_down_5pct": {"impact_usd": -41000.0, "impact_pct": -4.1},
+            "stress.vix_spike_30pct": {"impact_usd": -372000.0, "impact_pct": -37.2},
+        }
+
+        return AtlasValidationMessage(
+            agent_id=AgentId.ATLAS,
+            correlation_id=correlation_id,
+            parent_message_id=decision.message_id,
+            atlas_version=_ATLAS_VERSION,
+            approved=False,
+            executed_size=Decimal("0"),
+            original_size=proposed_size,
+            reason=block_reason,
+            risk_mode=RiskMode.BLACK,
+            checks_passed=[],
+            checks_failed=["kill_switches"],
+            metrics_snapshot=metrics,
+            portfolio_snapshot_id="mock-snapshot-blocked",
+            evaluation_time_ms=1.5,
         )

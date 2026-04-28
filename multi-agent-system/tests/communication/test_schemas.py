@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from multi_agent.communication import (
     AgentId,
     AtlasDecision,
+    AtlasReason,
     AtlasValidationMessage,
     CalibrationUpdate,
     ConsensusState,
@@ -28,19 +29,15 @@ from multi_agent.communication import (
     EvidenceItem,
     ExecutionMessage,
     FillRecord,
-    LimitDistances,
     MessageType,
     OptionLeg,
     OptionType,
-    PortfolioImpact,
-    PortfolioState,
     PostmortemMessage,
     ProposalMessage,
     RiskMode,
     SizeModulation,
     SlippageInfo,
     Stance,
-    StressTestResult,
     StrategyType,
     Thesis,
     ThesisEvaluation,
@@ -174,39 +171,48 @@ def decision_data() -> dict:
 
 @pytest.fixture
 def atlas_validation_data() -> dict:
+    """New Sprint 2A contract for AtlasValidationMessage."""
     return {
         "message_type": "ATLAS_VALIDATION",
         "agent_id": "ATLAS",
         "correlation_id": str(CORR_ID),
-        "decision": "APPROVED_WITH_CONDITIONS",
-        "portfolio_impact": {
-            "current_state": {
-                "portfolio_beta": 0.87,
-                "tech_concentration_pct": 28.4,
-                "vega_total": -1240.0,
-                "drawdown_from_peak_pct": 2.1,
-                "buying_power_used_pct": 34.0,
-            },
-            "post_trade_state": {
-                "portfolio_beta": 0.91,
-                "tech_concentration_pct": 30.5,
-                "vega_total": -1380.0,
-                "drawdown_from_peak_pct": 2.1,
-                "buying_power_used_pct": 38.0,
-            },
-            "limit_distances": {
-                "tech_concentration_limit": 35.0,
-                "distance_to_limit_pct": 13.0,
-                "vega_limit": -2000.0,
-                "distance_to_vega_limit_pct": 31.0,
-            },
-        },
-        "stress_test_results": [
-            {"scenario": "SPX_-5pct", "projected_pl_usd": -8200.0, "projected_pl_pct": -0.82},
-            {"scenario": "VIX_to_30", "projected_pl_usd": -4500.0, "projected_pl_pct": -0.45},
-        ],
-        "modulations_applied": ["Size aprobado al 2.05% según Decision previa"],
+        "atlas_version": "atlas-mvp-1.0",
+        "approved": True,
+        "executed_size": "4.10",
+        "original_size": "4.10",
+        "reason": "approved",
         "risk_mode": "GREEN",
+        "checks_passed": ["kill_switches", "pnl_halt", "buying_power", "single_name"],
+        "checks_failed": [],
+        "metrics_snapshot": {
+            "portfolio.beta_current": 0.82,
+            "portfolio.risk_mode": "GREEN",
+            "stress.spx_down_5pct": {"impact_usd": -41000.0, "impact_pct": -4.1},
+            "stress.vix_spike_30pct": {"impact_usd": -372000.0, "impact_pct": -37.2},
+        },
+        "portfolio_snapshot_id": "a" * 64,
+        "evaluation_time_ms": 2.5,
+    }
+
+
+@pytest.fixture
+def atlas_validation_rejected_data() -> dict:
+    """Rejected trade — executed_size = 0."""
+    return {
+        "message_type": "ATLAS_VALIDATION",
+        "agent_id": "ATLAS",
+        "correlation_id": str(CORR_ID),
+        "atlas_version": "atlas-mvp-1.0",
+        "approved": False,
+        "executed_size": "0",
+        "original_size": "4.10",
+        "reason": "rejected:kill_switch",
+        "risk_mode": "BLACK",
+        "checks_passed": [],
+        "checks_failed": ["kill_switches"],
+        "metrics_snapshot": {"portfolio.drawdown_from_peak_pct": -26.0},
+        "portfolio_snapshot_id": "b" * 64,
+        "evaluation_time_ms": 1.0,
     }
 
 
@@ -351,19 +357,39 @@ class TestDecisionRoundTrip:
 
 
 class TestAtlasValidationRoundTrip:
-    def test_creates_from_dict(self, atlas_validation_data):
+    def test_creates_approved_from_dict(self, atlas_validation_data):
         msg = AtlasValidationMessage.model_validate(atlas_validation_data)
         assert msg.message_type == MessageType.ATLAS_VALIDATION
-        assert msg.decision == AtlasDecision.APPROVED_WITH_CONDITIONS
+        assert msg.approved is True
+        assert msg.executed_size == Decimal("4.10")
         assert msg.risk_mode == RiskMode.GREEN
-        assert len(msg.stress_test_results) == 2
+        assert msg.reason == AtlasReason.APPROVED
+
+    def test_creates_rejected_from_dict(self, atlas_validation_rejected_data):
+        msg = AtlasValidationMessage.model_validate(atlas_validation_rejected_data)
+        assert msg.approved is False
+        assert msg.executed_size == Decimal("0")
+        assert msg.risk_mode == RiskMode.BLACK
 
     def test_json_round_trip(self, atlas_validation_data):
         msg = AtlasValidationMessage.model_validate(atlas_validation_data)
         serialized = json.loads(msg.model_dump_json())
         restored = AtlasValidationMessage.model_validate(serialized)
+        assert restored.approved == msg.approved
         assert restored.risk_mode == msg.risk_mode
-        assert restored.portfolio_impact.current_state.portfolio_beta == pytest.approx(0.87)
+        assert restored.portfolio_snapshot_id == msg.portfolio_snapshot_id
+
+    def test_checks_passed_preserved(self, atlas_validation_data):
+        msg = AtlasValidationMessage.model_validate(atlas_validation_data)
+        assert "kill_switches" in msg.checks_passed
+
+    def test_metrics_snapshot_contains_stress_tests(self, atlas_validation_data):
+        msg = AtlasValidationMessage.model_validate(atlas_validation_data)
+        assert "stress.spx_down_5pct" in msg.metrics_snapshot
+
+    def test_evaluation_time_ms_preserved(self, atlas_validation_data):
+        msg = AtlasValidationMessage.model_validate(atlas_validation_data)
+        assert msg.evaluation_time_ms == pytest.approx(2.5)
 
 
 class TestExecutionRoundTrip:
@@ -450,10 +476,35 @@ class TestProposalValidation:
 
 
 class TestAtlasValidationValidation:
-    def test_empty_stress_tests_rejected(self, atlas_validation_data):
-        atlas_validation_data["stress_test_results"] = []
+    def test_negative_executed_size_rejected(self, atlas_validation_data):
+        atlas_validation_data["executed_size"] = "-1.0"
         with pytest.raises(ValidationError):
             AtlasValidationMessage.model_validate(atlas_validation_data)
+
+    def test_negative_evaluation_time_rejected(self, atlas_validation_data):
+        atlas_validation_data["evaluation_time_ms"] = -1.0
+        with pytest.raises(ValidationError):
+            AtlasValidationMessage.model_validate(atlas_validation_data)
+
+    def test_invalid_risk_mode_rejected(self, atlas_validation_data):
+        atlas_validation_data["risk_mode"] = "PURPLE"
+        with pytest.raises(ValidationError):
+            AtlasValidationMessage.model_validate(atlas_validation_data)
+
+
+class TestAtlasReasonConstants:
+    def test_approved_constant(self):
+        assert AtlasReason.APPROVED == "approved"
+
+    def test_rejected_constants_start_with_rejected(self):
+        rejected_attrs = [v for k, v in vars(AtlasReason).items()
+                          if k.startswith("REJECTED_")]
+        assert all(v.startswith("rejected:") for v in rejected_attrs)
+
+    def test_size_reduced_constants_start_with_size_reduced(self):
+        reduced_attrs = [v for k, v in vars(AtlasReason).items()
+                         if k.startswith("SIZE_REDUCED_")]
+        assert all(v.startswith("size_reduced:") for v in reduced_attrs)
 
 
 class TestPostmortemValidation:

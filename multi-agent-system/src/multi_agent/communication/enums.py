@@ -100,3 +100,24 @@ class TradeResult(str, Enum):
     LOSS = "LOSS"
     BREAKEVEN = "BREAKEVEN"
     STOP_OUT = "STOP_OUT"
+
+
+class AtlasReason:
+    """
+    Convención de strings para AtlasValidationMessage.reason.
+    Formato: 'category:detail'.
+    No es un enum — el campo reason: str permite extensiones futuras sin
+    cambiar el schema del mensaje.
+    """
+    APPROVED = "approved"
+    SIZE_REDUCED_POSITION_LIMIT = "size_reduced:position_limit"
+    SIZE_REDUCED_BUCKET_LIMIT = "size_reduced:bucket_limit"
+    SIZE_REDUCED_BETA_LIMIT = "size_reduced:beta_limit"
+    SIZE_REDUCED_VEGA_LIMIT = "size_reduced:vega_limit"
+    REJECTED_PNL_HALT_DAILY = "rejected:pnl_halt_daily"
+    REJECTED_PNL_HALT_WEEKLY = "rejected:pnl_halt_weekly"
+    REJECTED_DRAWDOWN_HALT = "rejected:drawdown_halt"
+    REJECTED_BP_INSUFFICIENT = "rejected:bp_insufficient"
+    REJECTED_CORRELATION_SATURATED = "rejected:correlation_saturated"
+    REJECTED_KILL_SWITCH = "rejected:kill_switch"
+    REJECTED_SYSTEM_ERROR = "rejected:system_error"

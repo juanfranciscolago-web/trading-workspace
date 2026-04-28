@@ -46,7 +46,7 @@ class TestAllAgree:
 
     def test_atlas_approves(self):
         result, _ = _run("all_agree")
-        assert result.atlas_validation.decision == AtlasDecision.APPROVED
+        assert result.atlas_validation.approved is True
 
 
 class TestNyxDissents:
@@ -108,17 +108,17 @@ class TestAtlasBlocks:
 
     def test_atlas_blocks(self):
         result, _ = _run("atlas_blocks")
-        assert result.atlas_validation.decision == AtlasDecision.BLOCKED
+        assert result.atlas_validation.approved is False
 
-    def test_block_reason_in_modulations(self):
+    def test_block_reason_contains_atlas_reason(self):
         result, _ = _run("atlas_blocks")
         scenario = SCENARIOS["atlas_blocks"]
-        assert any(scenario.atlas_block_reason in m for m in result.atlas_validation.modulations_applied)
+        assert scenario.atlas_block_reason in result.atlas_validation.reason
 
-    def test_risk_mode_yellow(self):
+    def test_risk_mode_black_when_blocked(self):
         result, _ = _run("atlas_blocks")
         from multi_agent.communication.enums import RiskMode
-        assert result.atlas_validation.risk_mode == RiskMode.YELLOW
+        assert result.atlas_validation.risk_mode == RiskMode.BLACK
 
 
 class TestHighConvictionSolo:

@@ -27,6 +27,7 @@ import pytest
 from multi_agent.communication import (
     AgentId,
     AtlasDecision,
+    AtlasReason,
     AtlasValidationMessage,
     CalibrationUpdate,
     ConsensusState,
@@ -40,17 +41,13 @@ from multi_agent.communication import (
     EvidenceItem,
     ExecutionMessage,
     FillRecord,
-    LimitDistances,
     OptionLeg,
-    PortfolioImpact,
-    PortfolioState,
     PostmortemMessage,
     ProposalMessage,
     RiskMode,
     SizeModulation,
     SlippageInfo,
     Stance,
-    StressTestResult,
     StrategyType,
     Thesis,
     ThesisEvaluation,
@@ -159,37 +156,25 @@ def make_decision() -> DecisionMessage:
 
 
 def make_atlas_validation() -> AtlasValidationMessage:
-    state = PortfolioState(
-        portfolio_beta=0.87,
-        tech_concentration_pct=28.4,
-        vega_total=-1240.0,
-        drawdown_from_peak_pct=2.1,
-        buying_power_used_pct=34.0,
-    )
     return AtlasValidationMessage(
         agent_id=AgentId.ATLAS,
         correlation_id=CORR,
-        decision=AtlasDecision.APPROVED_WITH_CONDITIONS,
-        portfolio_impact=PortfolioImpact(
-            current_state=state,
-            post_trade_state=PortfolioState(
-                portfolio_beta=0.91,
-                tech_concentration_pct=30.5,
-                vega_total=-1380.0,
-                drawdown_from_peak_pct=2.1,
-                buying_power_used_pct=38.0,
-            ),
-            limit_distances=LimitDistances(
-                tech_concentration_limit=35.0,
-                distance_to_limit_pct=13.0,
-                vega_limit=-2000.0,
-                distance_to_vega_limit_pct=31.0,
-            ),
-        ),
-        stress_test_results=[
-            StressTestResult(scenario="SPX_-5pct", projected_pl_usd=-8200.0, projected_pl_pct=-0.82),
-        ],
+        atlas_version="atlas-mvp-1.0",
+        approved=True,
+        executed_size=Decimal("4.10"),
+        original_size=Decimal("4.10"),
+        reason=AtlasReason.APPROVED,
         risk_mode=RiskMode.GREEN,
+        checks_passed=["kill_switches", "pnl_halt", "buying_power", "single_name"],
+        checks_failed=[],
+        metrics_snapshot={
+            "portfolio.beta_current": 0.87,
+            "portfolio.risk_mode": "GREEN",
+            "stress.spx_down_5pct": {"impact_usd": -8200.0, "impact_pct": -0.82},
+            "stress.vix_spike_30pct": {"impact_usd": -37200.0, "impact_pct": -3.72},
+        },
+        portfolio_snapshot_id="a" * 64,
+        evaluation_time_ms=3.5,
     )
 
 
