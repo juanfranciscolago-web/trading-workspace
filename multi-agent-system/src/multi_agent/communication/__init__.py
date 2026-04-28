@@ -18,6 +18,7 @@ from .enums import (
     TradeStatus,
 )
 from .factory import deserialize_message
+from .message_bus import AgentChannels, AgentMessageBus, ConsumerGroups
 from .schemas import (
     AtlasValidationMessage,
     CalibrationUpdate,
@@ -50,6 +51,9 @@ from .schemas import (
 __all__ = [
     "BaseMessage",
     "deserialize_message",
+    "AgentMessageBus",
+    "AgentChannels",
+    "ConsumerGroups",
     # Enums
     "MessageType",
     "AgentId",
