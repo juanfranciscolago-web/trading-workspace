@@ -26,5 +26,5 @@ where = ["src"]
 "" = "src"
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "db"]
 testpaths = ["tests"]

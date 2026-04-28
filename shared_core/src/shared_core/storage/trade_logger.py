@@ -26,10 +26,9 @@ import json
 import logging
 import os
 from contextlib import contextmanager
-from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Iterator, Optional
+from typing import Callable, Iterator
 
 from shared_core.models import (
     TradeExecution,
@@ -114,26 +113,25 @@ class TradeLogger:
     via shared_core.storage.postgres_pool.
     """
 
-    def __init__(self, connection_factory):
+    def __init__(self, connection_factory: Callable):
         """
         Args:
-            connection_factory: Callable that returns a PostgreSQL connection
-                                (typically from a pool).
+            connection_factory: Zero-argument callable returning a context manager
+                                that yields a psycopg2 connection (e.g. pool.connection).
         """
-        self._get_connection = connection_factory
+        self._connection_factory = connection_factory
 
     @classmethod
-    def from_env(cls) -> TradeLogger:
+    def from_env(cls) -> "TradeLogger":
         """Initialize from environment variables."""
-        # Lazy import to avoid hard dependency
         try:
             from shared_core.storage.postgres_pool import get_pool
             pool = get_pool()
-            return cls(connection_factory=pool.getconn)
+            return cls(connection_factory=pool.connection)
         except ImportError:
             raise RuntimeError(
                 "PostgreSQL pool not configured. "
-                "Set DATABASE_URL env var and ensure psycopg is installed."
+                "Set DATABASE_URL env var and ensure psycopg2 is installed."
             )
 
     def init_schema(self) -> None:
@@ -201,12 +199,12 @@ class TradeLogger:
 
     def query_trades(
         self,
-        source: Optional[TradeSource] = None,
-        symbol: Optional[str] = None,
-        strategy: Optional[str] = None,
-        days: Optional[int] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        source: TradeSource | None = None,
+        symbol: str | None = None,
+        strategy: str | None = None,
+        days: int | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> list[dict]:
         """Query trades with optional filters."""
         clauses = []
@@ -297,17 +295,12 @@ class TradeLogger:
 
     @contextmanager
     def _cursor(self) -> Iterator:
-        """Context manager that yields a cursor and handles connection lifecycle."""
-        conn = self._get_connection()
-        try:
-            with conn.cursor() as cur:
-                yield cur
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            # Return to pool
-            if hasattr(conn, "close"):
-                # If connection is poolable, the pool wrapper handles return
-                pass
+        """Yield a cursor; commit on success, rollback on error, return conn to pool."""
+        with self._connection_factory() as conn:
+            try:
+                with conn.cursor() as cur:
+                    yield cur
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise

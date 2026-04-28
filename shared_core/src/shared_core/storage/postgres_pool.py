@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import contextmanager
-from typing import Iterator, Optional
+from typing import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ class PostgresPool:
 # Singleton
 # =============================================================================
 
-_global_pool: Optional[PostgresPool] = None
+_global_pool: PostgresPool | None = None
 
 
 def get_pool() -> PostgresPool:
