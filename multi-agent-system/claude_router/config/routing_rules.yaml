@@ -1,0 +1,316 @@
+# =============================================================================
+# Claude Router — Routing Rules Configuration
+# =============================================================================
+# Este archivo define qué modelo usar para cada tipo de tarea.
+# Modificable sin tocar código. El router lo recarga al inicializar.
+#
+# Modelos disponibles:
+#   - claude-haiku-4-5-20251001       ($1/$5 per MTok)   — alto volumen, baja complejidad
+#   - claude-sonnet-4-6                ($3/$15 per MTok)  — workhorse del sistema
+#   - claude-opus-4-7                  ($5/$25 per MTok)  — momentos críticos
+# =============================================================================
+
+# Configuración global
+global:
+  # Modelo a usar si la tarea no matchea ninguna regla específica
+  default_model: "claude-sonnet-4-6"
+
+  # Activar prompt caching (reduce costo 90% en cached reads)
+  enable_caching: true
+
+  # TTL del cache: "5m" o "1h"
+  cache_ttl: "5m"
+
+  # Activar Batch API para tareas async-eligible (50% descuento)
+  enable_batch_api: true
+
+  # Si True, la decisión de routing se loguea para auditoría
+  log_decisions: true
+
+  # Si True, métricas de costo se reportan a Prometheus/Grafana
+  emit_cost_metrics: true
+
+# =============================================================================
+# Reglas de routing por task_type
+# =============================================================================
+# Cada regla mapea un task_type a un modelo, con modificadores opcionales
+# según criticality.
+#
+# Estructura:
+#   task_type:
+#     default_model: <modelo a usar por default para esta tarea>
+#     by_criticality:
+#       low: <modelo si criticality=low>
+#       standard: <modelo si criticality=standard>
+#       high: <modelo si criticality=high>
+#       critical: <modelo si criticality=critical>
+#     async_eligible: <bool>  # Si True, puede usar Batch API
+#     enable_caching: <bool>  # Override del global
+#     max_tokens: <int>       # Task budget
+# =============================================================================
+
+rules:
+
+  # ---------------------------------------------------------------------------
+  # CAPA 1: Tareas de alto volumen → HAIKU
+  # ---------------------------------------------------------------------------
+
+  sentiment_classification:
+    default_model: "claude-haiku-4-5-20251001"
+    async_eligible: true
+    enable_caching: true
+    max_tokens: 500
+
+  entity_extraction:
+    default_model: "claude-haiku-4-5-20251001"
+    async_eligible: true
+    enable_caching: true
+    max_tokens: 1500
+
+  options_activity_tagging:
+    default_model: "claude-haiku-4-5-20251001"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 800
+
+  message_routing:
+    default_model: "claude-haiku-4-5-20251001"
+    async_eligible: false
+    enable_caching: false  # Routing decisions son únicas, no cacheables
+    max_tokens: 200
+
+  schema_validation:
+    default_model: "claude-haiku-4-5-20251001"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 300
+
+  ticker_summary:
+    default_model: "claude-haiku-4-5-20251001"
+    async_eligible: true
+    enable_caching: true
+    max_tokens: 500
+
+  social_keyword_detection:
+    default_model: "claude-haiku-4-5-20251001"
+    async_eligible: true
+    enable_caching: true
+    max_tokens: 300
+
+  alert_formatting:
+    default_model: "claude-haiku-4-5-20251001"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 500
+
+  postmortem_simple:
+    # Para outcomes claros (clear win/loss según reglas)
+    default_model: "claude-haiku-4-5-20251001"
+    async_eligible: true
+    enable_caching: true
+    max_tokens: 1500
+
+  macro_release_extraction:
+    default_model: "claude-haiku-4-5-20251001"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 1000
+
+  # ---------------------------------------------------------------------------
+  # CAPA 2: Razonamiento estándar → SONNET
+  # ---------------------------------------------------------------------------
+
+  proposal_generation:
+    # Generación de proposals de los 5 agentes alpha
+    default_model: "claude-sonnet-4-6"
+    by_criticality:
+      low: "claude-haiku-4-5-20251001"      # Setups muy simples
+      standard: "claude-sonnet-4-6"
+      high: "claude-sonnet-4-6"
+      critical: "claude-opus-4-7"           # High-conviction trades grandes
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 4000
+
+  cross_examination:
+    default_model: "claude-sonnet-4-6"
+    by_criticality:
+      low: "claude-sonnet-4-6"
+      standard: "claude-sonnet-4-6"
+      high: "claude-opus-4-7"               # Cuando hay disagreement profundo
+      critical: "claude-opus-4-7"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 3000
+
+  earnings_transcript_analysis:
+    default_model: "claude-sonnet-4-6"
+    async_eligible: true
+    enable_caching: true
+    max_tokens: 4000
+
+  narrative_tracking:
+    # Para Nyx — síntesis narrative-reality
+    default_model: "claude-sonnet-4-6"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 3500
+
+  macro_regime_analysis:
+    # Para Apollo
+    default_model: "claude-sonnet-4-6"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 4000
+
+  sector_rotation_analysis:
+    # Para Vesta
+    default_model: "claude-sonnet-4-6"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 4000
+
+  stress_test_interpretation:
+    default_model: "claude-sonnet-4-6"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 2500
+
+  postmortem_complex:
+    # Cuando outcome requiere análisis (mala tesis vs ejecución vs suerte)
+    default_model: "claude-sonnet-4-6"
+    async_eligible: true                    # Postmortems pueden esperar
+    enable_caching: true
+    max_tokens: 3000
+
+  daily_report:
+    default_model: "claude-sonnet-4-6"
+    async_eligible: true                    # Batch API para 50% off
+    enable_caching: true
+    max_tokens: 5000
+
+  weekly_report:
+    default_model: "claude-sonnet-4-6"
+    async_eligible: true
+    enable_caching: true
+    max_tokens: 8000
+
+  consensus_simple:
+    # Síntesis de Decision cuando hay mayoría clara
+    default_model: "claude-sonnet-4-6"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 2000
+
+  atlas_validation_green:
+    # Validación rutina cuando ATLAS está en modo Verde
+    default_model: "claude-sonnet-4-6"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 2000
+
+  # ---------------------------------------------------------------------------
+  # CAPA 3: Razonamiento crítico → OPUS
+  # ---------------------------------------------------------------------------
+
+  consensus_complex:
+    # Decisión de consenso con disagreement productivo entre 3+ agentes
+    default_model: "claude-opus-4-7"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 6000
+
+  atlas_validation_alert:
+    # ATLAS en modo Amarillo, Rojo o Negro
+    default_model: "claude-opus-4-7"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 8000
+
+  postmortem_critical:
+    # Pérdidas significativas — aprendizaje sistémico
+    default_model: "claude-opus-4-7"
+    async_eligible: true                    # Puede esperar pero alta calidad
+    enable_caching: true
+    max_tokens: 6000
+
+  agent_recalibration:
+    # Recalibración mensual — decisión estratégica
+    default_model: "claude-opus-4-7"
+    async_eligible: true
+    enable_caching: true
+    max_tokens: 10000
+
+  contrarian_flag_analysis:
+    # Cuando Nyx levanta contrarian flag
+    default_model: "claude-opus-4-7"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 5000
+
+  new_strategy_design:
+    # Research semanal — hipótesis nueva propuesta por agente
+    default_model: "claude-opus-4-7"
+    async_eligible: true
+    enable_caching: true
+    max_tokens: 12000
+
+  human_override_validation:
+    # Cuando el operador aprueba manualmente trade que ATLAS bloqueó
+    default_model: "claude-opus-4-7"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 5000
+
+  regime_inflection_analysis:
+    # Cambio de régimen identificado por Apollo
+    default_model: "claude-opus-4-7"
+    async_eligible: false
+    enable_caching: true
+    max_tokens: 8000
+
+# =============================================================================
+# Configuración de fallback
+# =============================================================================
+fallback:
+  # Si el modelo seleccionado falla, fallback a modelo inferior
+  enabled: true
+
+  # Mapping de fallbacks
+  chain:
+    "claude-opus-4-7": "claude-sonnet-4-6"
+    "claude-sonnet-4-6": "claude-haiku-4-5-20251001"
+    "claude-haiku-4-5-20251001": null      # No fallback desde Haiku
+
+  # Número máximo de retries antes de fallback
+  max_retries: 2
+
+  # Timeout en segundos antes de considerar fallback
+  timeout_seconds: 30
+
+  # Si True, se loguea cada vez que se usa fallback (para review humano)
+  flag_for_review: true
+
+# =============================================================================
+# Targets de monitoreo (para alertas si se desvían)
+# =============================================================================
+monitoring_targets:
+  # Distribución target de calls por modelo
+  haiku_pct_target: 70
+  sonnet_pct_target: 25
+  opus_pct_target: 5
+
+  # Cache hit rate mínimo aceptable
+  cache_hit_rate_min: 0.6
+
+  # % máximo de fallbacks aceptable
+  fallback_rate_max: 0.02
+
+  # Costo máximo por trade ejecutado (USD)
+  cost_per_trade_max: 0.50
+
+  # Costo diario máximo (USD) — alerta si se cruza
+  daily_cost_alert_threshold: 50
+
+  # Costo mensual máximo (USD) — alerta si se cruza
+  monthly_cost_alert_threshold: 200

@@ -1,0 +1,7 @@
+# Production dependencies
+anthropic>=0.40.0
+pyyaml>=6.0
+
+# Testing dependencies (install separately for dev)
+# pytest>=7.4.0
+# pytest-mock>=3.12.0

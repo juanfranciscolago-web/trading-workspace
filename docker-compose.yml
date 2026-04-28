@@ -1,0 +1,93 @@
+version: '3.9'
+
+# =============================================================================
+# Trading Workspace — Local Services
+# =============================================================================
+# Provides PostgreSQL + Redis for both Eolo and the multi-agent system.
+# Both systems connect to these shared services.
+#
+# Usage:
+#   docker-compose up -d        # Start in background
+#   docker-compose logs -f      # Watch logs
+#   docker-compose down         # Stop services
+#   docker-compose down -v      # Stop + delete volumes (resets data)
+# =============================================================================
+
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: trading_postgres
+    environment:
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: trader
+      POSTGRES_DB: trading
+      # Optimizations for trading workload (mostly read, periodic writes)
+      POSTGRES_INITDB_ARGS: "-c shared_buffers=512MB -c work_mem=32MB"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./multi-agent-system/db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trader -d trading"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: trading_redis
+    command: >
+      redis-server
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # Optional: pgAdmin for DB inspection
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: trading_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@trading.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    profiles:
+      - tools  # Only starts with: docker-compose --profile tools up
+
+  # Optional: Redis Commander for Redis inspection
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: trading_redis_commander
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    profiles:
+      - tools
+
+volumes:
+  postgres_data:
+    name: trading_postgres_data
+  redis_data:
+    name: trading_redis_data
+
+networks:
+  default:
+    name: trading_network
