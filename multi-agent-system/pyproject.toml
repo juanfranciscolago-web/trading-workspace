@@ -28,3 +28,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src", "db"]
 testpaths = ["tests"]
+markers = [
+    "integration: requires a running TimescaleDB instance",
+]
