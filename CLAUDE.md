@@ -260,8 +260,17 @@ Ejemplo: `feat(athena): implement CSP proposal generator with backtest validatio
 # Instalar shared-core en modo editable (en eolo-legacy y multi-agent-system)
 pip install -e ../shared-core
 
-# Correr tests de un módulo específico
+# ── Tests ────────────────────────────────────────────────────────────────────
+
+# Correr TODOS los tests del workspace (comando correcto)
+./run_tests.sh
+# ⚠️  NO usar: pytest shared_core/tests/ multi-agent-system/tests/ desde root.
+#    Razón: multi-agent-system/pyproject.toml rompe la resolución de paths
+#    cuando pytest se invoca desde el workspace root.
+
+# Correr tests de un subproyecto específico (siempre desde su directorio)
 cd shared-core && pytest tests/ -v
+cd multi-agent-system && pytest tests/ -v
 cd multi-agent-system/claude_router && pytest tests/ -v
 
 # Levantar servicios locales
