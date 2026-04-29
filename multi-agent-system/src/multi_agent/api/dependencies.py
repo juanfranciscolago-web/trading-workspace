@@ -11,6 +11,7 @@ from fastapi import Request
 
 from multi_agent.risk.config import BucketConfig, Phase1Limits
 from multi_agent.observability.llm_cost_repository import LLMCostRepository
+from multi_agent.persistence.validation_repository import ValidationRepository
 from multi_agent.risk.portfolio_snapshot import CachedSnapshotBuilder
 
 
@@ -32,3 +33,7 @@ def get_buckets(request: Request) -> BucketConfig:
 
 def get_cost_repo(request: Request) -> LLMCostRepository:
     return request.app.state.cost_repo
+
+
+def get_validation_repo(request: Request) -> ValidationRepository:
+    return ValidationRepository(request.app.state.pool)

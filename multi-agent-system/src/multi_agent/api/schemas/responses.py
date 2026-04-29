@@ -1,0 +1,98 @@
+"""
+Response schemas for portfolio, trades, and cost endpoints.
+
+TECH DEBT: CostByAgentResponse, CostByTaskResponse, CostDailyResponse use list[dict]
+(untyped). Convert to list[AgentCostRow], list[TaskCostRow], list[DailyTotalsRow]
+when ATHENA real generates consistent data with known field shapes.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel
+
+
+# ── Portfolio ──────────────────────────────────────────────────────────────────
+
+class PositionResponse(BaseModel):
+    ticker: str
+    asset_class: str
+    strategy_type: str | None
+    market_value_usd: float
+    quantity: int
+    delta: float
+    vega: float
+    theta: float
+
+
+class SnapshotResponse(BaseModel):
+    nav_usd: float
+    cash_usd: float
+    buying_power_used_pct: float
+    portfolio_beta: float
+    vega_total: float
+    pnl_daily_usd: float
+    pnl_daily_pct: float
+    pnl_weekly_pct: float
+    pnl_monthly_pct: float
+    drawdown_from_peak_pct: float
+    snapshot_at: str
+    snapshot_id: str
+    position_count: int
+
+
+# ── Trades / Validations ───────────────────────────────────────────────────────
+
+class ValidationSummaryItem(BaseModel):
+    correlation_id: str
+    approved: bool | None
+    executed_size_pct: float | None
+    original_size_pct: float | None
+    reason: str | None
+    atlas_version: str | None
+    portfolio_snapshot_id: str | None
+    evaluation_time_ms: float | None
+    checks_passed: list[str] | None
+    checks_failed: list[str] | None
+    risk_mode: str | None
+    created_at: str | None
+
+
+class ValidationDetailResponse(ValidationSummaryItem):
+    metrics_snapshot: dict[str, Any] | None
+
+
+class ValidationsListResponse(BaseModel):
+    items: list[ValidationSummaryItem]
+    count: int
+
+
+# ── Costs ──────────────────────────────────────────────────────────────────────
+
+class CostSummaryResponse(BaseModel):
+    period_days: int
+    total_calls: int
+    total_cost_usd: float
+    total_tokens: int
+    by_model: list[dict[str, Any]]
+
+
+class CostByAgentResponse(BaseModel):
+    # TECH DEBT: untyped list[dict]. Convert to list[AgentCostRow] when
+    # ATHENA real generates consistent data with known field shapes.
+    period_days: int
+    rows: list[dict[str, Any]]
+
+
+class CostByTaskResponse(BaseModel):
+    # TECH DEBT: untyped list[dict]. Convert to list[TaskCostRow] when
+    # ATHENA real generates consistent data with known field shapes.
+    period_days: int
+    rows: list[dict[str, Any]]
+
+
+class CostDailyResponse(BaseModel):
+    # TECH DEBT: untyped list[dict]. Convert to list[DailyTotalsRow] when
+    # ATHENA real generates consistent data with known field shapes.
+    period_days: int
+    rows: list[dict[str, Any]]

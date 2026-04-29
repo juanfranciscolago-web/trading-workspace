@@ -52,6 +52,12 @@ def create_app() -> FastAPI:
     )
 
     from multi_agent.api.routes.atlas import router as atlas_router
+    from multi_agent.api.routes.portfolio import router as portfolio_router
+    from multi_agent.api.routes.trades import router as trades_router
+    from multi_agent.api.routes.costs import router as costs_router
     app.include_router(atlas_router)
+    app.include_router(portfolio_router)
+    app.include_router(trades_router)
+    app.include_router(costs_router)
 
     return app
