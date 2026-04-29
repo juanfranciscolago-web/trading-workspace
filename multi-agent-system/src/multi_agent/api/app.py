@@ -31,6 +31,7 @@ async def _lifespan(app: FastAPI):
     from multi_agent.alerts.bus import AlertBus
     from multi_agent.alerts.dedup import AlertDedup
     from multi_agent.alerts.repository import AlertRepository
+    from multi_agent.alerts.retry_worker import RetryWorker
     from multi_agent.alerts.router import AlertRouter
     from multi_agent.alerts.sinks.telegram import TelegramSink
     from multi_agent.alerts.worker import AlertWorker
@@ -53,15 +54,25 @@ async def _lifespan(app: FastAPI):
     # Alert pipeline
     alert_bus = AlertBus()
     alert_repo = AlertRepository(pool)
+    alert_sink = TelegramSink()  # shared between router and retry worker
     alert_router = AlertRouter(
         dedup=AlertDedup(),
-        sinks=[TelegramSink()],
+        sinks=[alert_sink],
         repo=alert_repo,
     )
     alert_worker = AlertWorker(bus=alert_bus, router=alert_router)
     worker_task = asyncio.create_task(alert_worker.run())
     app.state.alert_worker = alert_worker
-    logger.info("✓ AlertWorker started")
+
+    retry_worker = RetryWorker(
+        sink=alert_sink,
+        repo=alert_repo,
+        interval=settings.ALERT_RETRY_INTERVAL_SECONDS,
+    )
+    retry_task = asyncio.create_task(retry_worker.run())
+    app.state.retry_worker = retry_worker
+    logger.info("✓ AlertWorker + RetryWorker started (retry_interval=%ds)",
+                settings.ALERT_RETRY_INTERVAL_SECONDS)
 
     # Telegram bot — inbound command polling.
     # Pool injected via bot_data so handlers share the same pool as the API
@@ -100,10 +111,14 @@ async def _lifespan(app: FastAPI):
             logger.exception("TelegramBot shutdown error (continuing)")
 
     alert_worker.shutdown()
+    retry_worker.shutdown()
     try:
-        await asyncio.wait_for(worker_task, timeout=10.0)
+        await asyncio.wait_for(
+            asyncio.gather(worker_task, retry_task, return_exceptions=True),
+            timeout=10.0,
+        )
     except (asyncio.TimeoutError, asyncio.CancelledError):
-        logger.warning("Alert worker did not stop cleanly within 10s")
+        logger.warning("Alert workers did not stop cleanly within 10s")
 
     pool.close_all()
     logger.info("API shutdown complete")

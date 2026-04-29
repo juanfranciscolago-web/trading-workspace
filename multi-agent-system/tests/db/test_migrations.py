@@ -59,6 +59,7 @@ EXPECTED_MIGRATION_VERSIONS = {
     "V010", "V011", "V012", "V013",
     "V014",
     "V015",
+    "V016",
 }
 
 EXPECTED_AGENT_IDS = {"athena", "apollo", "hermes", "nyx", "vesta", "atlas"}

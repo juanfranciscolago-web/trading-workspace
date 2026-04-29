@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
 
+    # ── Alerts retry queue ────────────────────────────────────────────────────
+    ALERT_RETRY_INTERVAL_SECONDS: int = 30  # poll interval for RetryWorker
+
     # ── HIGH priority: fail-fast at startup (raise = process cannot start) ───
 
     @field_validator("DATABASE_URL")

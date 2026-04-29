@@ -35,11 +35,12 @@ def _escape(text: str) -> str:
     return str(text).replace("_", r"\_").replace("*", r"\*").replace("`", r"\`")
 
 
-def format_alert(event: AlertEvent) -> str:
+def format_alert(event: AlertEvent, *, retry_delay_min: int | None = None) -> str:
     """Return a Telegram-ready Markdown string for the given AlertEvent."""
     emoji = _EMOJI.get(event.severity, "ℹ️")
     header = f"{emoji} *{event.severity.value}* — {_escape(event.title)}"
-    ts_line = f"_⏱ {_ts(event)}_"
+    delay_note = f" (+{retry_delay_min}min via retry)" if retry_delay_min else ""
+    ts_line = f"_⏱ {_ts(event)}{delay_note}_"
 
     body = _format_body(event)
 
