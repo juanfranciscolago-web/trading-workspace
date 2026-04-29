@@ -11,13 +11,10 @@ The pool argument must expose a `connection()` context manager
 from __future__ import annotations
 
 import json
-import logging
-from uuid import UUID
-
-import psycopg2.extras
-
 import json as _json
+import logging
 from datetime import datetime, timezone
+from uuid import UUID
 
 from multi_agent.communication.schemas import (
     AtlasValidationMessage,
@@ -25,8 +22,6 @@ from multi_agent.communication.schemas import (
     DecisionMessage,
     ProposalMessage,
 )
-
-psycopg2.extras.register_uuid()
 
 logger = logging.getLogger(__name__)
 

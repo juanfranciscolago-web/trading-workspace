@@ -1,7 +1,7 @@
 """
 PostgreSQL connection pool — shared between Eolo and multi-agent.
 
-Wraps psycopg2's ThreadedConnectionPool with sane defaults for the trading
+Wraps psycopg3's ConnectionPool with sane defaults for the trading
 system's workload (mostly read-heavy with periodic writes).
 """
 
@@ -17,9 +17,11 @@ logger = logging.getLogger(__name__)
 
 class PostgresPool:
     """
-    Wrapper around psycopg2 ThreadedConnectionPool.
+    Wrapper around psycopg3 ConnectionPool.
 
     Designed to be used as a singleton across the application.
+    open=True in the constructor means the pool opens eagerly on init:
+    if the DB is unreachable, PostgresPool() raises immediately (fail-fast).
     """
 
     def __init__(
@@ -28,21 +30,25 @@ class PostgresPool:
         min_connections: int = 2,
         max_connections: int = 10,
     ):
-        # Lazy import to avoid hard dependency at module load
         try:
-            from psycopg2.pool import ThreadedConnectionPool
+            from psycopg_pool import ConnectionPool
         except ImportError:
             raise RuntimeError(
-                "psycopg2 not installed. Run: pip install psycopg2-binary"
+                "psycopg[pool] not installed. Run: pip install 'psycopg[binary,pool]'"
             )
 
-        self._pool = ThreadedConnectionPool(
-            min_connections,
-            max_connections,
-            dsn,
+        self._pool = ConnectionPool(
+            conninfo=dsn,
+            min_size=min_connections,
+            max_size=max_connections,
+            open=True,
         )
+        # wait() blocks until min_size connections are ready.
+        # Raises PoolTimeout (subclass of psycopg.OperationalError) if the DB
+        # is unreachable within the timeout — preserves fail-fast behavior.
+        self._pool.wait(timeout=10.0)
         self.dsn = dsn
-        logger.info(f"PostgresPool initialized: min={min_connections} max={max_connections}")
+        logger.info("PostgresPool initialized: min=%d max=%d", min_connections, max_connections)
 
     @classmethod
     def from_env(cls) -> PostgresPool:
@@ -60,7 +66,7 @@ class PostgresPool:
         )
 
     def getconn(self):
-        """Get a connection from the pool. Caller must return it."""
+        """Get a connection from the pool. Caller must call putconn() when done."""
         return self._pool.getconn()
 
     def putconn(self, conn) -> None:
@@ -90,7 +96,7 @@ class PostgresPool:
 
     def close_all(self) -> None:
         """Close all connections (for shutdown)."""
-        self._pool.closeall()
+        self._pool.close()
         logger.info("PostgresPool closed")
 
 

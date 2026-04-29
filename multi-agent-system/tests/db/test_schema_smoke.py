@@ -35,8 +35,8 @@ class TestShared:
         assert row[1] == "multi_agent_athena"
 
     def test_invalid_source_rejected(self, cur):
-        import psycopg2
-        with pytest.raises(psycopg2.errors.CheckViolation):
+        import psycopg
+        with pytest.raises(psycopg.errors.CheckViolation):
             cur.execute("""
                 INSERT INTO shared.trades_log
                     (execution_id, source, symbol, asset_class, direction, quantity, status)
@@ -64,8 +64,8 @@ class TestAgents:
         assert row[1] == "scanning MSFT options"
 
     def test_state_fk_rejects_unknown_agent(self, cur):
-        import psycopg2
-        with pytest.raises(psycopg2.errors.ForeignKeyViolation):
+        import psycopg
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
             cur.execute(
                 "INSERT INTO agents.state (agent_id) VALUES ('unknown_agent')"
             )
@@ -148,8 +148,8 @@ class TestTrades:
             assert cur.fetchone()[0] == 1, f"Expected 1 row in trades.{table}"
 
     def test_conviction_score_constraint(self, cur):
-        import psycopg2
-        with pytest.raises(psycopg2.errors.CheckViolation):
+        import psycopg
+        with pytest.raises(psycopg.errors.CheckViolation):
             cur.execute("""
                 INSERT INTO trades.proposals
                     (correlation_id, proposing_agent, ticker, asset_class,
@@ -158,13 +158,13 @@ class TestTrades:
             """, (uuid4(),))
 
     def test_duplicate_critique_from_same_agent_rejected(self, cur):
-        import psycopg2
+        import psycopg
         corr = uuid4()
         cur.execute("""
             INSERT INTO trades.critiques (correlation_id, critique_agent, stance, full_payload)
             VALUES (%s, 'nyx', 'DISAGREE', '{}')
         """, (corr,))
-        with pytest.raises(psycopg2.errors.UniqueViolation):
+        with pytest.raises(psycopg.errors.UniqueViolation):
             cur.execute("""
                 INSERT INTO trades.critiques (correlation_id, critique_agent, stance, full_payload)
                 VALUES (%s, 'nyx', 'AGREE', '{}')
@@ -265,13 +265,13 @@ class TestAnalytics:
         assert abs(float(row[0]) - 0.6) < 1e-4
 
     def test_trust_score_unique_constraint(self, cur):
-        import psycopg2
+        import psycopg
         cur.execute("""
             INSERT INTO analytics.agent_trust_scores
                 (from_agent, to_agent, context, current_trust_score)
             VALUES ('apollo', 'nyx', 'macro_thesis', 0.5)
         """)
-        with pytest.raises(psycopg2.errors.UniqueViolation):
+        with pytest.raises(psycopg.errors.UniqueViolation):
             cur.execute("""
                 INSERT INTO analytics.agent_trust_scores
                     (from_agent, to_agent, context, current_trust_score)

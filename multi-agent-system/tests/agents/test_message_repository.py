@@ -24,8 +24,8 @@ def _dsn() -> str:
 @pytest.fixture(scope="module")
 def pool():
     try:
-        import psycopg2
-        conn = psycopg2.connect(_dsn(), connect_timeout=3)
+        import psycopg
+        conn = psycopg.connect(_dsn(), connect_timeout=3)
         conn.close()
     except Exception:
         pytest.skip("PostgreSQL not available — skipping MessageRepository integration tests")

@@ -1,7 +1,7 @@
 """
 Unit tests for shared_core.storage.postgres_pool and trade_logger.
 
-No real database required — uses MagicMock to simulate psycopg2.
+No real database required — uses MagicMock to simulate psycopg3.
 """
 from __future__ import annotations
 
@@ -92,7 +92,9 @@ class TestPostgresPool:
 
         postgres_pool.reset_pool()
         with patch.dict("os.environ", {"DATABASE_URL": "postgresql://x:x@localhost/x"}):
-            with patch("psycopg2.pool.ThreadedConnectionPool"):
+            # Patch ConnectionPool where it is imported inside PostgresPool.__init__
+            with patch("psycopg_pool.ConnectionPool") as mock_cls:
+                mock_cls.return_value.wait = MagicMock()
                 pool1 = postgres_pool.get_pool()
                 pool2 = postgres_pool.get_pool()
         assert pool1 is pool2
@@ -103,8 +105,10 @@ class TestPostgresPool:
 
         postgres_pool.reset_pool()
         with patch.dict("os.environ", {"DATABASE_URL": "postgresql://x:x@localhost/x"}):
-            with patch("psycopg2.pool.ThreadedConnectionPool"):
-                pool1 = postgres_pool.get_pool()
+            with patch("psycopg_pool.ConnectionPool") as mock_cls:
+                mock_cls.return_value.wait = MagicMock()
+                mock_cls.return_value.close = MagicMock()
+                postgres_pool.get_pool()
         postgres_pool.reset_pool()
         assert postgres_pool._global_pool is None
 

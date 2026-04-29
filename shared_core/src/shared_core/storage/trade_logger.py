@@ -109,7 +109,7 @@ class TradeLogger:
     """
     Persists trade executions to shared.trades_log.
 
-    Uses psycopg2 (or psycopg3) for PostgreSQL. Connection pooling expected
+    Uses psycopg3 for PostgreSQL. Connection pooling expected
     via shared_core.storage.postgres_pool.
     """
 
@@ -117,7 +117,7 @@ class TradeLogger:
         """
         Args:
             connection_factory: Zero-argument callable returning a context manager
-                                that yields a psycopg2 connection (e.g. pool.connection).
+                                that yields a psycopg connection (e.g. pool.connection).
         """
         self._connection_factory = connection_factory
 
@@ -131,7 +131,7 @@ class TradeLogger:
         except ImportError:
             raise RuntimeError(
                 "PostgreSQL pool not configured. "
-                "Set DATABASE_URL env var and ensure psycopg2 is installed."
+                "Set DATABASE_URL env var and ensure psycopg[binary,pool] is installed."
             )
 
     def init_schema(self) -> None:

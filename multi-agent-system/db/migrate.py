@@ -99,12 +99,12 @@ def run(dsn: str | None = None) -> int:
 
     Raises:
         RuntimeError: DATABASE_URL not set, or checksum mismatch on applied migration.
-        psycopg2.Error: Any database error during migration execution.
+        psycopg.Error: Any database error during migration execution.
     """
     try:
-        import psycopg2
+        import psycopg
     except ImportError:
-        raise RuntimeError("psycopg2 not installed. Run: pip install psycopg2-binary")
+        raise RuntimeError("psycopg not installed. Run: pip install 'psycopg[binary,pool]'")
 
     dsn = dsn or os.environ.get("DATABASE_URL")
     if not dsn:
@@ -119,7 +119,7 @@ def run(dsn: str | None = None) -> int:
         print("  No migration files found.")
         return 0
 
-    conn = psycopg2.connect(dsn)
+    conn = psycopg.connect(dsn)
     try:
         _ensure_migrations_table(conn)
         applied = _get_applied(conn)

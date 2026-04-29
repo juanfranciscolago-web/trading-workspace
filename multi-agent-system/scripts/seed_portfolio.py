@@ -21,10 +21,7 @@ from pathlib import Path
 # Ensure src/ is importable
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-import psycopg2
-import psycopg2.extras
-
-psycopg2.extras.register_uuid()
+import psycopg
 
 DSN = os.environ.get("DATABASE_URL", "postgresql://trader:trader@localhost:5432/trading")
 
@@ -194,8 +191,7 @@ _BUYING_POWER_USED = round(_MARKET_VALUE / NAV_USD * 100, 2)
 
 
 def seed(dsn: str = DSN) -> None:
-    conn = psycopg2.connect(dsn)
-    conn.autocommit = False
+    conn = psycopg.connect(dsn, autocommit=False)
     try:
         _seed_positions(conn)
         _seed_snapshot(conn)

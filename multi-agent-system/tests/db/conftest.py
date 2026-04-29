@@ -12,14 +12,10 @@ import os
 import sys
 from pathlib import Path
 
-import psycopg2.extras
 import pytest
 
 # Make db/ importable as top-level (migrate, reset_dev)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "db"))
-
-# Register UUID adapter globally so all tests can pass uuid.UUID to psycopg2
-psycopg2.extras.register_uuid()
 
 _TEST_DB = "trading_test"
 
@@ -49,8 +45,8 @@ def pytest_configure(config):
 def pg_available() -> bool:
     """True if the trading database is reachable."""
     try:
-        import psycopg2
-        conn = psycopg2.connect(_admin_dsn(), connect_timeout=3)
+        import psycopg
+        conn = psycopg.connect(_admin_dsn(), connect_timeout=3)
         conn.close()
         return True
     except Exception:
@@ -66,15 +62,14 @@ def test_db(pg_available):
     if not pg_available:
         pytest.skip("PostgreSQL not available — skipping DB integration tests")
 
-    import psycopg2
-    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+    import psycopg
 
     admin = _admin_dsn()
     test_dsn = _test_dsn()
 
-    # Create fresh test DB
-    conn = psycopg2.connect(admin)
-    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    # CREATE DATABASE / DROP DATABASE must run outside a transaction block.
+    # psycopg3: pass autocommit=True at connect time (cannot be changed mid-transaction).
+    conn = psycopg.connect(admin, autocommit=True)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
@@ -91,8 +86,7 @@ def test_db(pg_available):
     yield test_dsn
 
     # Teardown
-    conn = psycopg2.connect(admin)
-    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    conn = psycopg.connect(admin, autocommit=True)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
@@ -104,9 +98,9 @@ def test_db(pg_available):
 
 @pytest.fixture(scope="session")
 def db_conn(test_db):
-    """Persistent psycopg2 connection to trading_test for the whole test session."""
-    import psycopg2
-    conn = psycopg2.connect(test_db)
+    """Persistent psycopg3 connection to trading_test for the whole test session."""
+    import psycopg
+    conn = psycopg.connect(test_db)
     yield conn
     conn.close()
 

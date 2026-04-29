@@ -28,9 +28,9 @@ def _check_dsn_is_safe(dsn: str) -> None:
 
 def main() -> None:
     try:
-        import psycopg2
+        import psycopg
     except ImportError:
-        raise SystemExit("psycopg2 not installed. Run: pip install psycopg2-binary")
+        raise SystemExit("psycopg not installed. Run: pip install 'psycopg[binary,pool]'")
 
     dsn = os.environ.get("DATABASE_URL", "postgresql://trader:trader@localhost:5432/trading")
     _check_dsn_is_safe(dsn)
@@ -43,8 +43,9 @@ def main() -> None:
             print("Aborted.")
             return
 
-    conn = psycopg2.connect(dsn)
-    conn.autocommit = True
+    # autocommit=True passed at connect time — psycopg3 does not allow changing
+    # autocommit after a transaction has started, so we set it here upfront.
+    conn = psycopg.connect(dsn, autocommit=True)
     schemas = ["analytics", "market", "portfolio", "trades", "messages", "agents", "shared"]
     try:
         with conn.cursor() as cur:
