@@ -88,3 +88,5 @@ agents/temp/
 
 # Trade execution logs (sensitive)
 execution_logs/
+.env.*
+!.env.example
