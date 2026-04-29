@@ -4,7 +4,13 @@ TelegramSink — sends formatted alerts via python-telegram-bot.
 Retry policy (exponential backoff with jitter):
 - On 429 (rate limited): respect retry_after from Telegram response if present,
   else use 2^attempt + random(0, 1) seconds. Max 3 attempts.
-- On other errors: log and return None (no retry — alert is logged as failed).
+- On NetworkError / TimedOut: exponential backoff, max 3 attempts.
+- On BadRequest (Markdown parse failure): one plain-text fallback attempt,
+  then raise TelegramSinkError if that also fails.
+- On any other error: raise TelegramSinkError immediately (no retry).
+
+Raises TelegramSinkError on all delivery failures so the router records
+the actual Telegram API error rather than the opaque "sink returned None".
 """
 from __future__ import annotations
 
@@ -19,6 +25,10 @@ from .base import BaseSink
 logger = logging.getLogger(__name__)
 
 _MAX_RETRIES = 3
+
+
+class TelegramSinkError(Exception):
+    """Raised when TelegramSink fails to deliver after all retries."""
 
 
 def _chat_ids() -> list[str]:
@@ -50,10 +60,13 @@ class TelegramSink(BaseSink):
 
     async def send(self, event: AlertEvent, text: str) -> str | None:
         if not self._chat_id:
-            logger.error("TelegramSink: no chat_id configured — alert dropped")
-            return None
+            raise RuntimeError(
+                "TelegramSink: TELEGRAM_ALLOWED_CHAT_IDS not set — cannot determine alert destination"
+            )
 
         bot = self._get_bot()
+        last_exc: Exception | None = None
+
         for attempt in range(_MAX_RETRIES):
             try:
                 msg = await bot.send_message(
@@ -68,31 +81,74 @@ class TelegramSink(BaseSink):
                 return str(msg.message_id)
 
             except Exception as exc:
+                last_exc = exc
+
+                # BadRequest = Markdown parse failure — skip retries, go to plain-text fallback.
+                # Must be checked before _is_retryable: in PTB v22+ BadRequest ⊂ NetworkError.
+                if _is_bad_request(exc):
+                    break
+
                 retry_after = _extract_retry_after(exc)
                 if retry_after is not None and attempt < _MAX_RETRIES - 1:
-                    wait = retry_after
                     logger.warning(
-                        "TelegramSink 429 — retry_after=%ss attempt=%d", wait, attempt
+                        "TelegramSink 429 — retry_after=%ss attempt=%d", retry_after, attempt
                     )
-                    await asyncio.sleep(wait)
+                    await asyncio.sleep(retry_after)
                     continue
 
                 if attempt < _MAX_RETRIES - 1 and _is_retryable(exc):
                     wait = (2 ** attempt) + random.random()
                     logger.warning(
-                        "TelegramSink error — backoff %.2fs attempt=%d exc=%s",
+                        "TelegramSink error — backoff %.2fs attempt=%d exc=%r",
                         wait, attempt, exc,
                     )
                     await asyncio.sleep(wait)
                     continue
 
-                logger.error(
-                    "TelegramSink failed event=%s after %d attempts: %s",
-                    event.event_type, attempt + 1, exc,
-                )
-                return None
+                # Non-retryable or exhausted retries — exit loop
+                break
 
-        return None
+        # BadRequest usually means Markdown parse failure. One plain-text retry.
+        if last_exc is not None and _is_bad_request(last_exc):
+            plain = _strip_markdown(text)
+            logger.warning(
+                "TelegramSink: Markdown rejected (%r) — retrying as plain text for event=%s",
+                last_exc, event.event_type,
+            )
+            try:
+                msg = await bot.send_message(chat_id=self._chat_id, text=plain)
+                logger.info(
+                    "TelegramSink plain-text fallback succeeded message_id=%s event=%s",
+                    msg.message_id, event.event_type,
+                )
+                return str(msg.message_id)
+            except Exception as exc2:
+                last_exc = exc2
+                logger.error(
+                    "TelegramSink plain-text fallback also failed event=%s: %r",
+                    event.event_type, exc2,
+                )
+
+        logger.error(
+            "TelegramSink failed event=%s after %d attempt(s): %r",
+            event.event_type, _MAX_RETRIES, last_exc,
+        )
+        raise TelegramSinkError(
+            f"Telegram delivery failed for {event.event_type.value!r}: {last_exc}"
+        ) from last_exc
+
+
+def _strip_markdown(text: str) -> str:
+    """Remove MarkdownV1 control characters for plain-text fallback."""
+    return (
+        text
+        .replace(r"\_", "_")   # unescape escaped underscores first
+        .replace(r"\*", "*")   # unescape escaped asterisks
+        .replace(r"\`", "`")   # unescape escaped backticks
+        .replace("*", "")      # remove bold/italic markers
+        .replace("_", " ")     # replace italic markers with space
+        .replace("`", "")      # remove code markers
+    )
 
 
 def _extract_retry_after(exc: Exception) -> float | None:
@@ -103,7 +159,6 @@ def _extract_retry_after(exc: Exception) -> float | None:
             return float(exc.retry_after)
     except ImportError:
         pass
-    # Fallback: check for retry_after attribute
     ra = getattr(exc, "retry_after", None)
     if ra is not None:
         return float(ra)
@@ -115,5 +170,14 @@ def _is_retryable(exc: Exception) -> bool:
     try:
         from telegram.error import NetworkError, TimedOut
         return isinstance(exc, (NetworkError, TimedOut))
+    except ImportError:
+        return False
+
+
+def _is_bad_request(exc: Exception) -> bool:
+    """True for Telegram 400 Bad Request (typically malformed Markdown)."""
+    try:
+        from telegram.error import BadRequest
+        return isinstance(exc, BadRequest)
     except ImportError:
         return False
