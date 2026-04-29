@@ -53,7 +53,8 @@ class TestFireTestAlert:
 
     def test_returns_202_in_development(self):
         client, _ = _make_client()
-        with patch.dict("os.environ", {"ENVIRONMENT": "development"}):
+        with patch("multi_agent.api.routes.alerts.settings") as mock_s:
+            mock_s.ENVIRONMENT = "development"
             with patch("multi_agent.api.routes.alerts._bus") as mock_bus:
                 mock_bus.publish.return_value = 1
                 resp = client.post("/alerts/test")
@@ -61,12 +62,14 @@ class TestFireTestAlert:
 
     def test_returns_404_outside_development(self):
         client, _ = _make_client()
-        with patch.dict("os.environ", {"ENVIRONMENT": "production"}):
+        with patch("multi_agent.api.routes.alerts.settings") as mock_s:
+            mock_s.ENVIRONMENT = "production"
             resp = client.post("/alerts/test")
         assert resp.status_code == 404
 
     def test_returns_422_for_unknown_event_type(self):
         client, _ = _make_client()
-        with patch.dict("os.environ", {"ENVIRONMENT": "development"}):
+        with patch("multi_agent.api.routes.alerts.settings") as mock_s:
+            mock_s.ENVIRONMENT = "development"
             resp = client.post("/alerts/test?event_type=unknown.type")
         assert resp.status_code == 422

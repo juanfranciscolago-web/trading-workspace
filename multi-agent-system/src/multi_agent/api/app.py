@@ -7,18 +7,15 @@ Do NOT expose to public internet. Auth planned for Sprint 3+.
 Usage:
     uvicorn multi_agent.api.app:create_app --factory --host 127.0.0.1 --port 8000
     (or use scripts/run_api.sh)
-
-NOTE (Sprint 2B.2.b): .env is NOT loaded automatically by uvicorn.
-Run `export $(grep -v '^#' .env | xargs)` before starting, or add
-`python-dotenv` + `load_dotenv()` here once pydantic-settings is wired up.
 """
 from __future__ import annotations
 
 import logging
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+
+from multi_agent.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -38,15 +35,20 @@ async def _lifespan(app: FastAPI):
     from multi_agent.alerts.sinks.telegram import TelegramSink
     from multi_agent.alerts.worker import AlertWorker
 
-    dsn = os.environ.get("DATABASE_URL", "postgresql://trader:trader@localhost:5432/trading")
+    # Emit warnings that couldn't be logged at import time (logging not yet configured)
+    settings.log_startup_warnings()
 
-    pool = PostgresPool(dsn=dsn)
+    pool = PostgresPool(
+        dsn=settings.DATABASE_URL,
+        min_connections=settings.DB_POOL_MIN,
+        max_connections=settings.DB_POOL_MAX,
+    )
     app.state.pool = pool
     app.state.limits = load_limits()
     app.state.buckets = load_buckets()
     app.state.snapshot_builder = CachedSnapshotBuilder(SnapshotBuilder(pool), ttl_seconds=5.0)
     app.state.cost_repo = LLMCostRepository(pool)
-    logger.info("✓ DB pool ready")
+    logger.info("✓ DB pool ready (min=%d max=%d)", settings.DB_POOL_MIN, settings.DB_POOL_MAX)
 
     # Alert pipeline
     alert_bus = AlertBus()
@@ -61,23 +63,24 @@ async def _lifespan(app: FastAPI):
     app.state.alert_worker = alert_worker
     logger.info("✓ AlertWorker started")
 
-    # Telegram bot — inbound command polling (fail-isolated: errors here must not
-    # block startup, since alert delivery (TelegramSink) is a separate code path)
+    # Telegram bot — inbound command polling.
+    # Pool injected via bot_data so handlers share the same pool as the API
+    # (no get_pool() singleton divergence). Fail-isolated: errors here must
+    # not block startup since alert delivery (TelegramSink) is a separate path.
     tg_app = None
     try:
         from multi_agent.telegram_bot.bot import build_application
         tg_app = build_application()
+        tg_app.bot_data["pool"] = pool       # inject shared pool
         await tg_app.initialize()
         await tg_app.start()
         await tg_app.updater.start_polling()
         username = getattr(tg_app.bot, "username", None) or "unknown"
         logger.info("✓ TelegramBot polling started for @%s", username)
     except RuntimeError as exc:
-        # Raised by build_application() when TELEGRAM_BOT_TOKEN is not set
         logger.warning("✗ TelegramBot disabled: %s", exc)
         tg_app = None
     except Exception as exc:
-        # Any other failure (network, bad token) — alert outbound still works
         logger.error("✗ TelegramBot failed to start (API continues): %r", exc)
         tg_app = None
 

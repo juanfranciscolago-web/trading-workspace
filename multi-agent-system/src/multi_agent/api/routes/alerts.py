@@ -7,7 +7,6 @@ POST /alerts/test      — fire a test alert (development only)
 from __future__ import annotations
 
 import logging
-import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,6 +15,7 @@ from multi_agent.alerts.events import AlertEvent, AlertEventType, AlertSeverity
 from multi_agent.alerts.bus import AlertBus
 from multi_agent.alerts.repository import AlertRepository
 from multi_agent.api.dependencies import get_alert_repo
+from multi_agent.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/alerts", tags=["alerts"])
@@ -56,7 +56,7 @@ def fire_test_alert(
     Only available when ENVIRONMENT=development.
     Returns 404 in any other environment.
     """
-    if os.environ.get("ENVIRONMENT", "development") != "development":
+    if settings.ENVIRONMENT != "development":
         raise HTTPException(status_code=404, detail="not found")
 
     try:

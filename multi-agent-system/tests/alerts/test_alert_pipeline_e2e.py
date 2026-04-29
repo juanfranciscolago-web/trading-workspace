@@ -8,7 +8,6 @@ Session-scoped fixture verifies Redis availability upfront with a clear message.
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -28,7 +27,8 @@ from multi_agent.alerts.worker import AlertWorker
 def redis_available():
     """Session-scoped fixture: skip all e2e tests if Redis is not reachable."""
     import redis as _redis
-    url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    from multi_agent.config import settings
+    url = settings.REDIS_URL
     try:
         r = _redis.from_url(url, socket_connect_timeout=2)
         r.ping()

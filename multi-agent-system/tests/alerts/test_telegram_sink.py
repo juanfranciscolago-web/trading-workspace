@@ -59,9 +59,9 @@ class TestTelegramSink:
         assert bot.send_message.call_args[1]["parse_mode"] == "Markdown"
 
     async def test_no_chat_id_raises_runtime_error(self):
-        """Unconfigured TELEGRAM_ALLOWED_CHAT_IDS raises RuntimeError with actionable message."""
-        with patch.dict("os.environ", {"TELEGRAM_ALLOWED_CHAT_IDS": ""}):
-            sink = TelegramSink(bot=_mock_bot())  # reads env at init → None
+        """No chat_id configured raises RuntimeError with actionable message."""
+        sink = TelegramSink(bot=_mock_bot(), chat_id=None)
+        sink._chat_id = None  # force None — no env/settings dependency
         with pytest.raises(RuntimeError, match="TELEGRAM_ALLOWED_CHAT_IDS"):
             await sink.send(_event(), "test")
 
@@ -98,10 +98,11 @@ class TestTelegramSink:
                 await sink.send(_event(), "test")
         assert bot.send_message.call_count == 3
 
-    async def test_primary_chat_id_from_env(self):
-        """First ID in TELEGRAM_ALLOWED_CHAT_IDS is used as alert destination."""
+    async def test_primary_chat_id_from_settings(self):
+        """First ID in settings.primary_telegram_chat_id is used as alert destination."""
         bot = _mock_bot()
-        with patch.dict("os.environ", {"TELEGRAM_ALLOWED_CHAT_IDS": "111,222,333"}):
+        with patch("multi_agent.alerts.sinks.telegram.settings") as mock_s:
+            mock_s.primary_telegram_chat_id = "111"
             sink = TelegramSink(bot=bot)
         await sink.send(_event(), "test")
         assert bot.send_message.call_args[1]["chat_id"] == "111"

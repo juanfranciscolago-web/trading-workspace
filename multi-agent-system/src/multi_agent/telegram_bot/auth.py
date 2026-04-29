@@ -1,7 +1,7 @@
 """
 Telegram command auth — chat_id whitelist.
 
-TELEGRAM_ALLOWED_CHAT_IDS: comma-separated integer chat IDs in .env.
+TELEGRAM_ALLOWED_CHAT_IDS: validated and parsed at startup via Settings.
 First ID = primary alert destination (TelegramSink target).
 
 Fail-closed: if TELEGRAM_ALLOWED_CHAT_IDS is empty or unset, ALL requests
@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import functools
 import logging
-import os
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -20,20 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 def _load_allowed_ids() -> frozenset[int]:
-    raw = os.environ.get("TELEGRAM_ALLOWED_CHAT_IDS", "")
-    ids = set()
-    for part in raw.split(","):
-        part = part.strip()
-        if part:
-            try:
-                ids.add(int(part))
-            except ValueError:
-                logger.warning("TELEGRAM_ALLOWED_CHAT_IDS: invalid entry %r — skipped", part)
+    from multi_agent.config import settings
+    ids = frozenset(settings.telegram_chat_ids)
     if not ids:
         logger.warning(
             "TELEGRAM_ALLOWED_CHAT_IDS is empty — all Telegram commands will be denied (fail-closed)"
         )
-    return frozenset(ids)
+    return ids
 
 
 def require_auth(handler):

@@ -13,7 +13,7 @@ If True, the caller should skip dispatching to any sink.
 from __future__ import annotations
 
 import logging
-import os
+
 
 from .events import AlertEvent, AlertEventType
 
@@ -53,10 +53,8 @@ class AlertDedup:
         if self._redis is not None:
             return self._redis
         import redis as _redis
-        return _redis.from_url(
-            os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
-            decode_responses=True,
-        )
+        from multi_agent.config import settings
+        return _redis.from_url(settings.REDIS_URL, decode_responses=True)
 
     def is_duplicate(self, event: AlertEvent) -> tuple[bool, str]:
         """

@@ -12,25 +12,30 @@ Commands:
 Auth: all commands require chat_id in TELEGRAM_ALLOWED_CHAT_IDS (fail-closed).
 Service calls: direct import of service layer (not HTTP) for efficiency.
 
+Pool injection: the FastAPI lifespan injects the shared PostgresPool via
+  tg_app.bot_data["pool"] = pool
+before calling initialize(). Handlers access it via context.bot_data["pool"].
+This ensures a single pool is used across the API and bot (no singleton divergence).
+
 Lifecycle (integrated with FastAPI lifespan):
-  await bot.initialize()
-  await bot.start()
-  await bot.updater.start_polling()
+  tg_app.bot_data["pool"] = pool
+  await tg_app.initialize()
+  await tg_app.start()
+  await tg_app.updater.start_polling()
   ...
-  await bot.updater.stop()
-  await bot.stop()
-  await bot.shutdown()
+  await tg_app.updater.stop()
+  await tg_app.stop()
+  await tg_app.shutdown()
 """
 from __future__ import annotations
 
 import logging
-import os
-from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
+from multi_agent.config import settings
 from .auth import require_auth
 
 logger = logging.getLogger(__name__)
@@ -63,7 +68,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 @require_auth
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        snapshot, risk_mode = _get_snapshot_and_mode()
+        snapshot, risk_mode = _get_snapshot_and_mode(context)
         nav = float(snapshot.nav_usd)
         ts = snapshot.snapshot_at.astimezone(_ART).strftime("%H:%M:%S ART")
         text = (
@@ -81,7 +86,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 @require_auth
 async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        snapshot, _ = _get_snapshot_and_mode()
+        snapshot, _ = _get_snapshot_and_mode(context)
         text = (
             f"*Portfolio*\n"
             f"💰 NAV: *${float(snapshot.nav_usd):,.0f}*\n"
@@ -100,7 +105,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 @require_auth
 async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        snapshot, _ = _get_snapshot_and_mode()
+        snapshot, _ = _get_snapshot_and_mode(context)
         positions = snapshot.positions
         if not positions:
             await update.message.reply_text("_Sin posiciones abiertas._", parse_mode="Markdown")
@@ -122,7 +127,7 @@ async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 @require_auth
 async def cmd_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        snapshot, _ = _get_snapshot_and_mode()
+        snapshot, _ = _get_snapshot_and_mode(context)
         text = (
             f"*PnL*\n"
             f"📅 Diario: *{snapshot.pnl_daily_pct:+.2f}%* "
@@ -138,14 +143,17 @@ async def cmd_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ── Service helpers ───────────────────────────────────────────────────────────
 
-def _get_snapshot_and_mode():
-    """Call the risk service layer directly (no HTTP round-trip)."""
+def _get_snapshot_and_mode(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Call the risk service layer directly (no HTTP round-trip).
+    Uses the PostgresPool injected by the lifespan via bot_data["pool"],
+    ensuring a single shared pool (no singleton divergence with get_pool()).
+    """
     from multi_agent.risk import get_current_risk_mode
     from multi_agent.risk.config import load_limits
     from multi_agent.risk.portfolio_snapshot import CachedSnapshotBuilder, SnapshotBuilder
-    from shared_core.storage.postgres_pool import get_pool
 
-    pool = get_pool()
+    pool = context.bot_data["pool"]
     builder = CachedSnapshotBuilder(SnapshotBuilder(pool))
     snapshot = builder.get()
     limits = load_limits()
@@ -156,7 +164,7 @@ def _get_snapshot_and_mode():
 # ── Application factory ───────────────────────────────────────────────────────
 
 def build_application() -> Application:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    token = settings.TELEGRAM_BOT_TOKEN
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
     app = Application.builder().token(token).build()

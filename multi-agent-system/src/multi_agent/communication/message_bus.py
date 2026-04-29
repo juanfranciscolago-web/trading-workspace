@@ -115,8 +115,8 @@ class AgentMessageBus:
             import redis
         except ImportError:
             raise RuntimeError("redis-py not installed. Run: pip install redis")
-        url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-        return cls(redis.from_url(url, decode_responses=False))
+        from multi_agent.config import settings
+        return cls(redis.from_url(settings.REDIS_URL, decode_responses=False))
 
     # ── Publishing ────────────────────────────────────────────────────────────
 

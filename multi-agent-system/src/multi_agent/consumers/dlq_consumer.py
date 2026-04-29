@@ -51,8 +51,8 @@ class DlqConsumer:
     @classmethod
     def from_env(cls, repo) -> "DlqConsumer":
         import redis
-        url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-        return cls(redis.from_url(url, decode_responses=False), repo)
+        from multi_agent.config import settings
+        return cls(redis.from_url(settings.REDIS_URL, decode_responses=False), repo)
 
     def start(self) -> None:
         if self._running:

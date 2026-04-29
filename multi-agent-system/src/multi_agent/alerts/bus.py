@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+
+from multi_agent.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ ALERTS_CHANNEL = "alerts:events"
 
 
 def _redis_url() -> str:
-    return os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    return settings.REDIS_URL
 
 
 class AlertBus:

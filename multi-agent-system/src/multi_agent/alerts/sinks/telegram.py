@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import random
 
+from multi_agent.config import settings
 from ..events import AlertEvent
 from .base import BaseSink
 
@@ -31,32 +31,19 @@ class TelegramSinkError(Exception):
     """Raised when TelegramSink fails to deliver after all retries."""
 
 
-def _chat_ids() -> list[str]:
-    """Return the list of allowed (and target) chat IDs from env."""
-    raw = os.environ.get("TELEGRAM_ALLOWED_CHAT_IDS", "")
-    return [x.strip() for x in raw.split(",") if x.strip()]
-
-
-def _primary_chat_id() -> str | None:
-    """First ID in the whitelist = primary alert destination."""
-    ids = _chat_ids()
-    return ids[0] if ids else None
-
-
 class TelegramSink(BaseSink):
 
     def __init__(self, bot=None, chat_id: str | None = None) -> None:
         self._bot = bot
-        self._chat_id = chat_id or _primary_chat_id()
+        self._chat_id = chat_id if chat_id is not None else settings.primary_telegram_chat_id
 
     def _get_bot(self):
         if self._bot is not None:
             return self._bot
         from telegram import Bot
-        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        if not token:
+        if not settings.TELEGRAM_BOT_TOKEN:
             raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
-        return Bot(token=token)
+        return Bot(token=settings.TELEGRAM_BOT_TOKEN)
 
     async def send(self, event: AlertEvent, text: str) -> str | None:
         if not self._chat_id:
