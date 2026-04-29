@@ -17,7 +17,7 @@ pytestmark = pytest.mark.integration
 
 EXPECTED_SCHEMAS = {
     "shared", "agents", "messages", "trades",
-    "portfolio", "market", "analytics",
+    "portfolio", "market", "analytics", "alerts",
 }
 
 EXPECTED_TABLES = {
@@ -40,6 +40,7 @@ EXPECTED_TABLES = {
     ("analytics", "llm_costs"),
     ("analytics", "risk_mode_transitions"),
     ("analytics", "agent_trust_scores"),
+    ("alerts",    "sent_alerts"),
 }
 
 EXPECTED_HYPERTABLES = {
@@ -57,6 +58,7 @@ EXPECTED_MIGRATION_VERSIONS = {
     "V006", "V007", "V008", "V009",
     "V010", "V011", "V012", "V013",
     "V014",
+    "V015",
 }
 
 EXPECTED_AGENT_IDS = {"athena", "apollo", "hermes", "nyx", "vesta", "atlas"}
