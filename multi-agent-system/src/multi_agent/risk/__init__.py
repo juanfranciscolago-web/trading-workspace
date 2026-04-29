@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .atlas_core import validate as atlas_validate
+from .atlas_core import validate as atlas_validate, get_current_risk_mode
 from .checks import CheckResult
 from .config import BucketConfig, Phase1Limits, load_buckets, load_limits
 from .portfolio_snapshot import (
@@ -13,6 +13,7 @@ from .portfolio_snapshot import (
 
 __all__ = [
     "atlas_validate",
+    "get_current_risk_mode",
     "CheckResult",
     "Phase1Limits",
     "BucketConfig",

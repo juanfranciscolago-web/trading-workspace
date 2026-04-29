@@ -82,6 +82,14 @@ def validate(
 
 # ── Internal ──────────────────────────────────────────────────────────────────
 
+def get_current_risk_mode(
+    snapshot: PortfolioSnapshot,
+    limits: Phase1Limits,
+) -> RiskMode:
+    """Public helper: current risk mode without running a full validation."""
+    return _compute_risk_mode(snapshot, limits, rejected=False)
+
+
 def _validate_internal(
     proposal: ProposalMessage,
     decision: DecisionMessage,
