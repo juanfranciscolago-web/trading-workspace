@@ -92,7 +92,7 @@ def publish_roll_opportunity(
     """Emitted when a short option position is approaching expiry and roll is suggested."""
     _bus.publish(AlertEvent(
         event_type=AlertEventType.ROLL_OPPORTUNITY,
-        severity=AlertSeverity.INFO,
+        severity=AlertSeverity.WARN,
         title=f"Roll opportunity: {ticker} expiring {expiry_date} ({dte} DTE)",
         payload={
             "position_id": position_id,

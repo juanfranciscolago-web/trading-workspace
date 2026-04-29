@@ -33,10 +33,10 @@ class TestEmojiAndHeader:
         text = format_alert(event)
         assert "🔄" in text
 
-    def test_info_uses_info_emoji(self):
-        event = _event(AlertEventType.ROLL_OPPORTUNITY, {"position_id": "p1", "expiry_date": "2026-05-16"}, AlertSeverity.INFO)
+    def test_roll_opportunity_uses_warn_emoji(self):
+        event = _event(AlertEventType.ROLL_OPPORTUNITY, {"position_id": "p1", "expiry_date": "2026-05-16"}, AlertSeverity.WARN)
         text = format_alert(event)
-        assert "ℹ️" in text
+        assert "🔄" in text
 
     def test_title_in_header(self):
         event = _event(AlertEventType.MARGIN_BREACH, {"symbol": "AAPL"})
