@@ -7,6 +7,10 @@ Do NOT expose to public internet. Auth planned for Sprint 3+.
 Usage:
     uvicorn multi_agent.api.app:create_app --factory --host 127.0.0.1 --port 8000
     (or use scripts/run_api.sh)
+
+NOTE (Sprint 2B.2.b): .env is NOT loaded automatically by uvicorn.
+Run `export $(grep -v '^#' .env | xargs)` before starting, or add
+`python-dotenv` + `load_dotenv()` here once pydantic-settings is wired up.
 """
 from __future__ import annotations
 
@@ -42,6 +46,7 @@ async def _lifespan(app: FastAPI):
     app.state.buckets = load_buckets()
     app.state.snapshot_builder = CachedSnapshotBuilder(SnapshotBuilder(pool), ttl_seconds=5.0)
     app.state.cost_repo = LLMCostRepository(pool)
+    logger.info("✓ DB pool ready")
 
     # Alert pipeline
     alert_bus = AlertBus()
@@ -54,15 +59,49 @@ async def _lifespan(app: FastAPI):
     alert_worker = AlertWorker(bus=alert_bus, router=alert_router)
     worker_task = asyncio.create_task(alert_worker.run())
     app.state.alert_worker = alert_worker
+    logger.info("✓ AlertWorker started")
 
-    logger.info("API startup complete")
+    # Telegram bot — inbound command polling (fail-isolated: errors here must not
+    # block startup, since alert delivery (TelegramSink) is a separate code path)
+    tg_app = None
+    try:
+        from multi_agent.telegram_bot.bot import build_application
+        tg_app = build_application()
+        await tg_app.initialize()
+        await tg_app.start()
+        await tg_app.updater.start_polling()
+        username = getattr(tg_app.bot, "username", None) or "unknown"
+        logger.info("✓ TelegramBot polling started for @%s", username)
+    except RuntimeError as exc:
+        # Raised by build_application() when TELEGRAM_BOT_TOKEN is not set
+        logger.warning("✗ TelegramBot disabled: %s", exc)
+        tg_app = None
+    except Exception as exc:
+        # Any other failure (network, bad token) — alert outbound still works
+        logger.error("✗ TelegramBot failed to start (API continues): %r", exc)
+        tg_app = None
+
+    app.state.tg_app = tg_app
+
     yield
+
+    # ── Shutdown ──────────────────────────────────────────────────────────────
+
+    if tg_app is not None:
+        try:
+            await tg_app.updater.stop()
+            await tg_app.stop()
+            await tg_app.shutdown()
+            logger.info("TelegramBot stopped cleanly")
+        except Exception:
+            logger.exception("TelegramBot shutdown error (continuing)")
 
     alert_worker.shutdown()
     try:
         await asyncio.wait_for(worker_task, timeout=10.0)
     except (asyncio.TimeoutError, asyncio.CancelledError):
         logger.warning("Alert worker did not stop cleanly within 10s")
+
     pool.close_all()
     logger.info("API shutdown complete")
 
