@@ -14,6 +14,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from multi_agent.config import settings
 
@@ -130,6 +131,14 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="Internal API for ATLAS risk validation and observability.",
         lifespan=_lifespan,
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000"],
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
     )
 
     from multi_agent.api.routes.alerts import router as alerts_router
