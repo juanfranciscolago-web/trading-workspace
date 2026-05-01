@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+from enum import Enum
 from pathlib import Path
 
 from pydantic import field_validator, model_validator
@@ -35,6 +36,17 @@ logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"^\d{8,12}:[A-Za-z0-9_-]{35,}$")
 _VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+
+
+class TradingMode(str, Enum):
+    PAPER = "paper"
+    REAL = "real"
+
+
+REAL_MODE_TOKEN = "CAUTION_GOING_LIVE_STOPPING_PAPER_GOING_REAL_TRADING"
+REAL_MODE_HUMAN_MESSAGE = (
+    "CAUTION: YOU ARE GOING LIVE! This action stops Paper and goes REAL TRADING"
+)
 
 
 class Settings(BaseSettings):
@@ -61,6 +73,10 @@ class Settings(BaseSettings):
 
     # ── Alerts retry queue ────────────────────────────────────────────────────
     ALERT_RETRY_INTERVAL_SECONDS: int = 30  # poll interval for RetryWorker
+
+    # ── Trading mode ──────────────────────────────────────────────────────────
+    TRADING_MODE: TradingMode = TradingMode.PAPER
+    TRADING_MODE_CONFIRM: str | None = None
 
     # ── HIGH priority: fail-fast at startup (raise = process cannot start) ───
 
@@ -111,6 +127,16 @@ class Settings(BaseSettings):
                 f"DB_POOL_MIN ({self.DB_POOL_MIN}) must be <= DB_POOL_MAX "
                 f"({self.DB_POOL_MAX}) — check your .env file"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_trading_mode(self) -> "Settings":
+        if self.TRADING_MODE == TradingMode.REAL:
+            if self.TRADING_MODE_CONFIRM != REAL_MODE_TOKEN:
+                raise ValueError(
+                    f"{REAL_MODE_HUMAN_MESSAGE}\n"
+                    f"To activate, set TRADING_MODE_CONFIRM={REAL_MODE_TOKEN}"
+                )
         return self
 
     # ── WARNING priority: called from lifespan after logging is configured ───
