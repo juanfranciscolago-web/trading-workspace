@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,6 +51,7 @@ async def _lifespan(app: FastAPI):
     app.state.buckets = load_buckets()
     app.state.snapshot_builder = CachedSnapshotBuilder(SnapshotBuilder(pool), ttl_seconds=5.0)
     app.state.cost_repo = LLMCostRepository(pool)
+    app.state.startup_time = datetime.now(timezone.utc)
     logger.info("✓ DB pool ready (min=%d max=%d)", settings.DB_POOL_MIN, settings.DB_POOL_MAX)
 
     # Alert pipeline
@@ -146,10 +148,12 @@ def create_app() -> FastAPI:
     from multi_agent.api.routes.portfolio import router as portfolio_router
     from multi_agent.api.routes.trades import router as trades_router
     from multi_agent.api.routes.costs import router as costs_router
+    from multi_agent.api.routes.system import router as system_router
     app.include_router(alerts_router)
     app.include_router(atlas_router)
     app.include_router(portfolio_router)
     app.include_router(trades_router)
     app.include_router(costs_router)
+    app.include_router(system_router)
 
     return app
