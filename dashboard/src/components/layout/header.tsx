@@ -1,5 +1,7 @@
 'use client'
 
+import { useState, useEffect } from 'react'
+
 interface HeaderProps {
   mode?: 'paper' | 'real'
   sysStatus?: 'ok' | 'error' | 'degraded'
@@ -28,13 +30,40 @@ const MARKET_COLOR: Record<string, string> = {
   after: 'text-amber-400',
 }
 
+const ET_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+})
+
+function formatClock(d: Date): string {
+  return `${ET_FORMATTER.format(d)} ET`
+}
+
 export function Header({
   mode = 'paper',
   sysStatus = 'ok',
   marketState = 'open',
-  clockStr = '14:32:05 ET',
+  clockStr,
   updatedStr = 'updated 2s ago',
 }: HeaderProps) {
+  const [internalClock, setInternalClock] = useState<string>('')
+
+  useEffect(() => {
+    if (clockStr !== undefined) return
+
+    setInternalClock(formatClock(new Date()))
+    const id = setInterval(() => {
+      setInternalClock(formatClock(new Date()))
+    }, 1000)
+
+    return () => clearInterval(id)
+  }, [clockStr])
+
+  const displayClock = clockStr ?? internalClock
+
   return (
     <header className="h-14 shrink-0 bg-[#0d0d0d] border-b border-white/[0.06] flex items-center px-6 gap-3">
       {/* Left: brand + mode badge */}
@@ -63,7 +92,7 @@ export function Header({
           {MARKET_LABEL[marketState] ?? 'MARKET ?'}
         </span>
 
-        <span className="font-mono text-white/60">{clockStr}</span>
+        <span className="font-mono text-white/60">{displayClock}</span>
 
         <span className="text-white/30">{updatedStr}</span>
       </div>
