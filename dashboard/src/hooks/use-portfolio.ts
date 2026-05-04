@@ -9,5 +9,6 @@ export function usePortfolioSnapshot() {
   return useQuery<PortfolioSnapshot>({
     queryKey: ['portfolio', 'snapshot'],
     queryFn: () => fetcher<PortfolioSnapshot>('/portfolio/snapshot'),
+    refetchInterval: 30_000,
   })
 }
