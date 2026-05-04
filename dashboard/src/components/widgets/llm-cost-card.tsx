@@ -37,12 +37,7 @@ export function LLMCostCard() {
 
   if (!data) return null
 
-  // HACK PHASE 0: backend /costs/daily has rows: list[dict] (untyped on the Python side).
-  // This cast assumes specific fields verified manually via curl.
-  // Sprint 2B.3 must type this properly via Pydantic model on backend (CostRow).
-  // See Sprint 2B.2 retro: "Cost responses tienen list[dict] sin tipar".
-  type CostRow = { date: string; calls: number; cost_usd: number; total_tokens: number }
-  const today = data.rows[0] as CostRow | undefined
+  const today = data.rows[0]
 
   return (
     <Card>

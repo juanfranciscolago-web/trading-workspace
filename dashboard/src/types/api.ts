@@ -293,6 +293,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/system/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * System health overview
+         * @description Returns health of all subsystems. Always responds 200 — individual
+         *     subsystems may report 'error' but the endpoint itself does not fail.
+         */
+        get: operations["status_view_system_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/system/mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Trading mode and uptime
+         * @description Returns current trading mode (paper/real) and backend startup time.
+         */
+        get: operations["mode_view_system_mode_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -346,9 +387,7 @@ export interface components {
             /** Period Days */
             period_days: number;
             /** Rows */
-            rows: {
-                [key: string]: unknown;
-            }[];
+            rows: components["schemas"]["DailyTotalsRow"][];
         };
         /** CostSummaryResponse */
         CostSummaryResponse: {
@@ -364,6 +403,32 @@ export interface components {
             by_model: {
                 [key: string]: unknown;
             }[];
+        };
+        /**
+         * DailyTotalsRow
+         * @description Single day totals row for /costs/daily endpoint.
+         */
+        DailyTotalsRow: {
+            /**
+             * Date
+             * @description ISO date (YYYY-MM-DD).
+             */
+            date: string;
+            /**
+             * Calls
+             * @description Number of LLM calls on this date.
+             */
+            calls: number;
+            /**
+             * Cost Usd
+             * @description Total cost in USD.
+             */
+            cost_usd: number;
+            /**
+             * Total Tokens
+             * @description Total tokens (input + output + cache).
+             */
+            total_tokens: number;
         };
         /** ExposureLimitsOut */
         ExposureLimitsOut: {
@@ -478,6 +543,67 @@ export interface components {
          * @enum {string}
          */
         StrategyType: "CSP" | "COVERED_CALL" | "CREDIT_SPREAD" | "DEBIT_SPREAD" | "IRON_CONDOR" | "LEAP" | "CALENDAR" | "SWING_EQUITY" | "CRYPTO_SPOT" | "ZERO_DTE" | "WEEKLY" | "SECTOR_ROTATION";
+        /**
+         * SystemModeResponse
+         * @description Current trading mode and backend startup time.
+         */
+        SystemModeResponse: {
+            /**
+             * Mode
+             * @description paper or real, controlled by TRADING_MODE env var.
+             * @enum {string}
+             */
+            mode: "paper" | "real";
+            /**
+             * Since
+             * Format: date-time
+             * @description When the backend started (UTC).
+             */
+            since: string;
+        };
+        /**
+         * SystemStatusResponse
+         * @description Health overview of all subsystems.
+         */
+        SystemStatusResponse: {
+            /**
+             * Api
+             * @description API service. Always 'ok' if this endpoint responded.
+             * @enum {string}
+             */
+            api: "ok" | "error" | "unknown";
+            /**
+             * Bus
+             * @description Redis bus (used by alerts pub/sub and message streams).
+             * @enum {string}
+             */
+            bus: "ok" | "error" | "unknown";
+            /**
+             * Atlas
+             * @description ATLAS risk module (buckets and limits loaded).
+             * @enum {string}
+             */
+            atlas: "ok" | "error" | "unknown";
+            /**
+             * Db
+             * @description PostgreSQL connection pool.
+             * @enum {string}
+             */
+            db: "ok" | "error" | "unknown";
+            /**
+             * Checks Duration Ms
+             * @description Duration of each individual health check in milliseconds.
+             */
+            checks_duration_ms: {
+                [key: string]: number;
+            };
+            /**
+             * Checked At
+             * Format: date-time
+             * @description When the health checks were performed (UTC).
+             */
+            checked_at: string;
+        };
         /**
          * ValidateRequest
          * @description Input for POST /atlas/validate.
@@ -1009,6 +1135,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    status_view_system_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemStatusResponse"];
+                };
+            };
+        };
+    };
+    mode_view_system_mode_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemModeResponse"];
                 };
             };
         };

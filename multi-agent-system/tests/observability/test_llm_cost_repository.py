@@ -306,5 +306,5 @@ class TestAggregationReads:
         rows = [(datetime.date(2026, 4, 28), 3, 0.01, 1000)]
         r = self._repo_with_rows(pricing_file, rows)
         daily = r.get_daily_totals(days=7)
-        assert daily[0]["date"] == "2026-04-28"
-        assert daily[0]["calls"] == 3
+        assert daily[0].date == "2026-04-28"
+        assert daily[0].calls == 3

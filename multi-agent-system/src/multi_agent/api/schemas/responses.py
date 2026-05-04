@@ -1,15 +1,15 @@
 """
 Response schemas for portfolio, trades, and cost endpoints.
 
-TECH DEBT: CostByAgentResponse, CostByTaskResponse, CostDailyResponse use list[dict]
-(untyped). Convert to list[AgentCostRow], list[TaskCostRow], list[DailyTotalsRow]
-when ATHENA real generates consistent data with known field shapes.
+TECH DEBT: CostByAgentResponse, CostByTaskResponse use list[dict]
+(untyped). Convert to list[AgentCostRow], list[TaskCostRow] when
+ATHENA real generates consistent data with known field shapes.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ── Portfolio ──────────────────────────────────────────────────────────────────
@@ -91,8 +91,14 @@ class CostByTaskResponse(BaseModel):
     rows: list[dict[str, Any]]
 
 
+class DailyTotalsRow(BaseModel):
+    """Single day totals row for /costs/daily endpoint."""
+    date: str = Field(description="ISO date (YYYY-MM-DD).")
+    calls: int = Field(description="Number of LLM calls on this date.")
+    cost_usd: float = Field(description="Total cost in USD.")
+    total_tokens: int = Field(description="Total tokens (input + output + cache).")
+
+
 class CostDailyResponse(BaseModel):
-    # TECH DEBT: untyped list[dict]. Convert to list[DailyTotalsRow] when
-    # ATHENA real generates consistent data with known field shapes.
     period_days: int
-    rows: list[dict[str, Any]]
+    rows: list[DailyTotalsRow]

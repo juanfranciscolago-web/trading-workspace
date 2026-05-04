@@ -17,6 +17,8 @@ from typing import Any
 
 import yaml
 
+from multi_agent.api.schemas.responses import DailyTotalsRow
+
 logger = logging.getLogger(__name__)
 
 # Same config dir resolution as risk/config.py
@@ -236,7 +238,7 @@ class LLMCostRepository:
             for r in rows
         ]
 
-    def get_daily_totals(self, days: int = 7) -> list[dict[str, Any]]:
+    def get_daily_totals(self, days: int = 7) -> list[DailyTotalsRow]:
         """Daily cost totals, most recent first."""
         since = _since(days)
         with self._pool.cursor() as cur:
@@ -258,12 +260,12 @@ class LLMCostRepository:
             rows = cur.fetchall()
 
         return [
-            {
-                "date": str(r[0]),
-                "calls": int(r[1]),
-                "cost_usd": float(r[2] or 0),
-                "total_tokens": int(r[3] or 0),
-            }
+            DailyTotalsRow(
+                date=str(r[0]),
+                calls=int(r[1]),
+                cost_usd=float(r[2] or 0),
+                total_tokens=int(r[3] or 0),
+            )
             for r in rows
         ]
 
