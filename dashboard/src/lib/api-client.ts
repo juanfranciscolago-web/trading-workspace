@@ -15,11 +15,30 @@ export type Json200<
   ? T
   : never
 
-export async function fetcher<T>(path: string): Promise<T> {
-  const url = `${BASE_URL}${path}`
+function buildUrl(
+  base: string,
+  path: string,
+  params?: Record<string, string | number | boolean>,
+): string {
+  const url = `${base}${path}`
+  if (!params || Object.keys(params).length === 0) {
+    return url
+  }
+  const searchParams = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    searchParams.append(key, String(value))
+  }
+  return `${url}?${searchParams.toString()}`
+}
+
+export async function fetcher<T>(
+  path: string,
+  params?: Record<string, string | number | boolean>,
+): Promise<T> {
+  const url = buildUrl(BASE_URL, path, params)
   const res = await fetch(url)
   if (!res.ok) {
-    throw new Error(`${res.status} ${res.statusText} — ${url}`)
+    throw new Error(`Fetch failed: ${res.status} ${res.statusText} (${path})`)
   }
   return res.json() as Promise<T>
 }

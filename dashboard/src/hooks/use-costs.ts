@@ -9,5 +9,6 @@ export function useCostsDaily() {
   return useQuery<CostsDaily>({
     queryKey: ['costs', 'daily'],
     queryFn: () => fetcher<CostsDaily>('/costs/daily'),
+    refetchInterval: 30_000,
   })
 }
