@@ -6,6 +6,7 @@ import { TradingModeCard } from '@/components/widgets/trading-mode-card'
 import { RiskModeCard } from '@/components/widgets/risk-mode-card'
 import { NavPnLCard } from '@/components/widgets/nav-pnl-card'
 import { RecentAlertsCard } from '@/components/widgets/recent-alerts-card'
+import { AgentsCard } from '@/components/widgets/agents-card'
 
 function formatDateLine(d: Date): string {
   const weekday = d.toLocaleDateString('en-US', { weekday: 'long' })
@@ -30,6 +31,9 @@ export default function HomePage() {
         </div>
         <div className="lg:col-span-2">
           <RecentAlertsCard />
+        </div>
+        <div className="sm:col-span-2 lg:col-span-4">
+          <AgentsCard />
         </div>
       </div>
     </>
