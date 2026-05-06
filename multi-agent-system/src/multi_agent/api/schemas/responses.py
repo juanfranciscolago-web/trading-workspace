@@ -7,6 +7,8 @@ ATHENA real generates consistent data with known field shapes.
 """
 from __future__ import annotations
 
+from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -102,3 +104,32 @@ class DailyTotalsRow(BaseModel):
 class CostDailyResponse(BaseModel):
     period_days: int
     rows: list[DailyTotalsRow]
+
+
+# ── Agents ─────────────────────────────────────────────────────────────────────
+
+class AgentItem(BaseModel):
+    """Agent config + state combined for /agents endpoint."""
+
+    # config
+    agent_id: str
+    display_name: str
+    role: str
+    time_horizon_min_days: int | None = None
+    time_horizon_max_days: int | None = None
+    default_llm_model: str
+    max_portfolio_pct: Decimal
+    is_active: bool
+
+    # state (LEFT JOIN, may be null if agent never started)
+    status: str | None = None
+    current_task: str | None = None
+    last_heartbeat: datetime | None = None
+    last_proposal_at: datetime | None = None
+    last_error: str | None = None
+    error_count_24h: int | None = None
+    llm_cost_today_usd: Decimal | None = None
+
+
+class AgentsListResponse(BaseModel):
+    items: list[AgentItem]

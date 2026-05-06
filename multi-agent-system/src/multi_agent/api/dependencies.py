@@ -12,6 +12,7 @@ from fastapi import Request
 from multi_agent.risk.config import BucketConfig, Phase1Limits
 from multi_agent.observability.llm_cost_repository import LLMCostRepository
 from multi_agent.alerts.repository import AlertRepository
+from multi_agent.persistence.agents_repository import AgentsRepository
 from multi_agent.persistence.validation_repository import ValidationRepository
 from multi_agent.risk.portfolio_snapshot import CachedSnapshotBuilder
 
@@ -42,3 +43,7 @@ def get_validation_repo(request: Request) -> ValidationRepository:
 
 def get_alert_repo(request: Request) -> AlertRepository:
     return AlertRepository(request.app.state.pool)
+
+
+def get_agents_repo(request: Request) -> AgentsRepository:
+    return AgentsRepository(request.app.state.pool)
