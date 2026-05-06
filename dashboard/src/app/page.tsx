@@ -4,6 +4,8 @@ import { LLMCostCard } from '@/components/widgets/llm-cost-card'
 import { SystemStatusCard } from '@/components/widgets/system-status-card'
 import { TradingModeCard } from '@/components/widgets/trading-mode-card'
 import { RiskModeCard } from '@/components/widgets/risk-mode-card'
+import { NavPnLCard } from '@/components/widgets/nav-pnl-card'
+import { RecentAlertsCard } from '@/components/widgets/recent-alerts-card'
 
 function formatDateLine(d: Date): string {
   const weekday = d.toLocaleDateString('en-US', { weekday: 'long' })
@@ -23,6 +25,12 @@ export default function HomePage() {
         <TradingModeCard />
         <RiskModeCard />
         <LLMCostCard />
+        <div className="lg:col-span-2">
+          <NavPnLCard />
+        </div>
+        <div className="lg:col-span-2">
+          <RecentAlertsCard />
+        </div>
       </div>
     </>
   )

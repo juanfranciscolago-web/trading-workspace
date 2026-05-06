@@ -40,9 +40,9 @@ export function LLMCostCard() {
   const today = data.rows[0]
 
   return (
-    <Card>
+    <Card style={{ borderLeft: '2px solid #444' }}>
       <CardHeader>
-        <CardTitle>LLM Cost</CardTitle>
+        <CardTitle className="text-sm font-medium text-white/60 uppercase tracking-wide">LLM Cost</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         <span className="font-mono text-4xl font-semibold">
