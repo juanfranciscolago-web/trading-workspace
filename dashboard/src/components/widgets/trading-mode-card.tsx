@@ -4,6 +4,7 @@ import { useSystemMode } from '@/hooks/use-system-mode'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { ModeBadge } from '@/components/ui/mode-badge'
 
 const SINCE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   timeZone: 'UTC',
@@ -24,11 +25,6 @@ function formatSince(iso: string): string {
 const BORDER_COLOR: Record<string, string> = {
   paper: '#185FA5',
   real: '#E24B4A',
-}
-
-const BADGE_COLOR: Record<string, string> = {
-  paper: 'bg-[#185FA5]/15 text-[#185FA5] border-[#185FA5]/40',
-  real: 'bg-red-900/40 text-red-400 border-red-700/40',
 }
 
 export function TradingModeCard() {
@@ -53,18 +49,15 @@ export function TradingModeCard() {
   }
 
   if (!data) return null
+  if (data.mode !== 'paper' && data.mode !== 'real') return null
 
   return (
-    <Card style={{ borderLeft: `2px solid ${BORDER_COLOR[data.mode] ?? '#666'}` }}>
+    <Card style={{ borderLeft: `2px solid ${BORDER_COLOR[data.mode]}` }}>
       <CardHeader>
         <CardTitle className="text-sm font-medium text-white/60 uppercase tracking-wide">Mode</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
-        <span
-          className={`inline-block self-start text-base font-bold px-2 py-1 rounded tracking-widest uppercase border ${BADGE_COLOR[data.mode] ?? 'bg-white/5 text-white/40 border-white/20'}`}
-        >
-          {data.mode}
-        </span>
+        <ModeBadge mode={data.mode} className="self-start text-base" />
         <span className="font-mono text-xs text-white/40">{formatSince(data.since)}</span>
       </CardContent>
     </Card>

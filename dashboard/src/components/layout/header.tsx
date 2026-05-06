@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { ModeBadge } from '@/components/ui/mode-badge'
 
 interface HeaderProps {
   mode?: 'paper' | 'real'
@@ -68,15 +69,7 @@ export function Header({
     <header className="h-14 shrink-0 bg-[#0d0d0d] border-b border-white/[0.06] flex items-center px-6 gap-3">
       {/* Left: brand + mode badge */}
       <span className="text-base font-semibold text-white/80 tracking-wide">TW</span>
-      <span
-        className={`text-xs font-bold px-1.5 py-0.5 rounded tracking-widest uppercase border ${
-          mode === 'paper'
-            ? 'bg-[#185FA5]/15 text-[#185FA5] border-[#185FA5]/40'
-            : 'bg-red-900/40 text-red-400 border-red-700/40'
-        }`}
-      >
-        {mode}
-      </span>
+      <ModeBadge mode={mode} />
 
       {/* Spacer */}
       <div className="flex-1" />
