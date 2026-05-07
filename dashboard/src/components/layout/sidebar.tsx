@@ -23,7 +23,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
     title: 'CONTROL',
     items: [
       { label: 'Agents', href: '/agents', soon: true, sprint: '2B.4' },
-      { label: 'Config', href: '/config', soon: true, sprint: '2B.4' },
+      { label: 'Config', href: '/config' },
       { label: 'Backtesting', href: '/backtesting', soon: true, sprint: 'S5' },
     ],
   },

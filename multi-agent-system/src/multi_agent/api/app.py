@@ -150,6 +150,7 @@ def create_app() -> FastAPI:
     from multi_agent.api.routes.costs import router as costs_router
     from multi_agent.api.routes.system import router as system_router
     from multi_agent.api.routes.agents import router as agents_router
+    from multi_agent.api.routes.config import router as config_router
     app.include_router(alerts_router)
     app.include_router(atlas_router)
     app.include_router(portfolio_router)
@@ -157,5 +158,6 @@ def create_app() -> FastAPI:
     app.include_router(costs_router)
     app.include_router(system_router)
     app.include_router(agents_router)
+    app.include_router(config_router)
 
     return app
