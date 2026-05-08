@@ -206,7 +206,8 @@ Verificando shapes para F.4.3, descubrimos que **`/atlas/limits` no expone todas
 
 - **Toggle de Trading Mode con safeguards** (double-confirmation token). Prioridad alta dentro de 2B.5: es el bloque que justifica el sprint.  
 - Editores de limits/buckets si son realmente necesarios (probablemente NO — los limits no se editan en runtime usualmente).  
-- Cleanup chore: remover type guards muertos en `TradingModeCard` y `RiskModeCard` (ver §7 tech debt).
+- ✅ Cleanup chore (parcial): type guard muerto eliminado en `TradingModeCard` (commit `d42646f`, hoy).
+- Cleanup cross-stack pendiente: tipar `risk_mode` como `Literal[...]` en backend Pydantic, regenerar OpenAPI + types frontend, después remover guard en `RiskModeCard` (ver §7 tech debt).
 
 ### Slices A.2 + A.3 (en algún momento)
 
@@ -239,7 +240,8 @@ Verificando shapes para F.4.3, descubrimos que **`/atlas/limits` no expone todas
 - ⚠️ Cache `.next` puede romper `tsc --noEmit` con duplicados de tipos. Workaround: `rm -rf .next` antes.  
 - ⚠️ `RISK_BORDER` en risk-mode-card está tipado `Record<string, string>` pero podría ser `Record<RiskLevel, string>` para tipado más fuerte. Cosmético.  
 - ⚠️ `API_BASE_URL` duplicado entre `api-client.ts` y `use-agents.ts`. Si aparece en un tercer archivo, extraer a un módulo `config/env.ts` o exportar desde `api-client.ts`.  
-- ⚠️ `TradingModeCard` y `RiskModeCard` tienen type guards `if (data.mode !== 'paper' && data.mode !== 'real') return null` (y equivalente para risk\_mode) que son **rama muerta** — el schema OpenAPI ya tipa esos campos como literal union strict. Cuando se escribieron, el schema era `string` genérico, ahora ya no. Cleanup futuro en commit `chore: remove dead type guards in mode/risk widgets`. La convención "type guards over casts" sigue válida cuando el narrowing es necesario; acá ya no lo es.
+- ✅ ~~`TradingModeCard` tenía un type guard `if (data.mode !== 'paper' && data.mode !== 'real') return null` que era rama muerta — el schema OpenAPI ya tipa `mode` como literal union strict.~~ Resuelto en commit `d42646f` (chore: remove dead type guard in TradingModeCard).
+- ⚠️ `RiskModeCard` tiene un type guard análogo (`isValidRiskLevel(mode)`) que **NO es rama muerta** — el OpenAPI todavía tipa `risk_mode` como `string` genérico (el backend Pydantic usa `risk_mode: str`, no `Literal["GREEN", "YELLOW", "RED", "BLACK"]`). Para limpiarlo hay que hacer cambio cross-stack: tipar `risk_mode` como `Literal[...]` en Pydantic → regenerar OpenAPI → regenerar types frontend → recién entonces eliminar `VALID_RISK_LEVELS`, `isValidRiskLevel` y el guard. Candidato a commit `chore:` en Sprint 2B.5+ o sprint posterior.
 
 **Testing**:
 
@@ -298,7 +300,7 @@ Volví. Backend: [sí/no]. Docker: [sí/no]. Retomo desde [bloque específico].
 
 **Estado para retomar**:
 
-- main up to date con origin/main (5 commits totales pusheados el 7 mayo: `157ea82`, `688e6ed`, `9e8da34`, `ee1a12d`, `0d930c3`).  
+- main 2 commits adelante de origin/main al inicio de la sesión 8 mayo: `6f1d6f4` (docs update), `d42646f` (chore TradingModeCard guard cleanup). Los 5 commits anteriores (`157ea82`, `688e6ed`, `9e8da34`, `ee1a12d`, `0d930c3`) están pusheados.  
 - Working tree clean.  
 - Sprint 2B.4 cerrado completamente. Próximo bloque arranca limpio.  
 - Para 2B.5 Trading Mode toggle: `/system/mode` ya existe (GET). Falta endpoint `POST /system/mode` con double-confirmation token. Mecanismo de confirmación a definir al arrancar (env var, header, body con token, etc.).  
