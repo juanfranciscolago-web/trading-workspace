@@ -30,6 +30,7 @@ async def _lifespan(app: FastAPI):
     from multi_agent.risk.config import load_buckets, load_limits
     from multi_agent.risk.portfolio_snapshot import CachedSnapshotBuilder, SnapshotBuilder
     from multi_agent.observability.llm_cost_repository import LLMCostRepository
+    from multi_agent.persistence.system_repository import SystemRepository
     from multi_agent.alerts.bus import AlertBus
     from multi_agent.alerts.dedup import AlertDedup
     from multi_agent.alerts.repository import AlertRepository
@@ -53,6 +54,26 @@ async def _lifespan(app: FastAPI):
     app.state.cost_repo = LLMCostRepository(pool)
     app.state.startup_time = datetime.now(timezone.utc)
     logger.info("✓ DB pool ready (min=%d max=%d)", settings.DB_POOL_MIN, settings.DB_POOL_MAX)
+
+    # DB-backed mode: bootstrap from env on first run, otherwise read latest.
+    system_repo = SystemRepository(pool)
+    current_mode = system_repo.get_current_mode()
+    if current_mode is None:
+        current_mode = system_repo.insert_mode_change(
+            mode=settings.TRADING_MODE.value,
+            source="env",
+        )
+    app.state.trading_mode = {
+        "mode": current_mode["mode"],
+        "since": current_mode["changed_at"],
+        "source": current_mode["source"],
+    }
+    logger.info(
+        "✓ Trading mode: %s (since %s, source=%s)",
+        app.state.trading_mode["mode"],
+        app.state.trading_mode["since"].isoformat(),
+        app.state.trading_mode["source"],
+    )
 
     # Alert pipeline
     alert_bus = AlertBus()

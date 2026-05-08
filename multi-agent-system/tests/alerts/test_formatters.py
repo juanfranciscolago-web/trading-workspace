@@ -89,3 +89,13 @@ class TestBodyFields:
         assert "2026-05-16" in text
         assert "17" in text
         assert "45.3" in text
+
+    def test_mode_changed_has_from_to_source(self):
+        event = _event(
+            AlertEventType.MODE_CHANGED,
+            {"from": "paper", "to": "real", "source": "api"},
+        )
+        text = format_alert(event)
+        assert "paper" in text
+        assert "real" in text
+        assert "api" in text

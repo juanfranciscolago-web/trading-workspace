@@ -57,6 +57,13 @@ class TestMakeDedupKey:
         event = _event(AlertEventType.MARGIN_BREACH, {})
         assert make_dedup_key(event) == "alerts:dedup:margin:unknown"
 
+    def test_mode_changed_uses_to_and_timestamp(self):
+        event = _event(AlertEventType.MODE_CHANGED, {"to": "real"})
+        key = make_dedup_key(event)
+        assert key.startswith("alerts:dedup:mode:real:")
+        suffix = key.removeprefix("alerts:dedup:mode:real:")
+        assert suffix.isdigit()
+
 
 # ── is_duplicate tests ────────────────────────────────────────────────────────
 

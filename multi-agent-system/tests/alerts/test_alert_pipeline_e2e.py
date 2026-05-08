@@ -194,8 +194,8 @@ class TestAlertPipelineE2E:
         # No events → router not called
         router.route.assert_not_called()
 
-    async def test_all_four_event_types_publishable(self, redis_available, mock_repo, mock_sink_result):
-        """All 4 AlertEventType values can be published and processed."""
+    async def test_all_atlas_publisher_event_types(self, redis_available, mock_repo, mock_sink_result):
+        """All 4 AlertEventType values produced by atlas_publishers can be published and processed."""
         from multi_agent.agents.atlas_publishers import (
             publish_margin_breach, publish_stop_loss_hit,
             publish_system_failure, publish_roll_opportunity,

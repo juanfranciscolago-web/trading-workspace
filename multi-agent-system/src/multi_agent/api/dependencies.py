@@ -15,6 +15,7 @@ from multi_agent.alerts.repository import AlertRepository
 from multi_agent.persistence.agents_repository import AgentsRepository
 from multi_agent.persistence.validation_repository import ValidationRepository
 from multi_agent.risk.portfolio_snapshot import CachedSnapshotBuilder
+from multi_agent.persistence.system_repository import SystemRepository
 
 
 def get_pool(request: Request):
@@ -47,3 +48,7 @@ def get_alert_repo(request: Request) -> AlertRepository:
 
 def get_agents_repo(request: Request) -> AgentsRepository:
     return AgentsRepository(request.app.state.pool)
+
+
+def get_system_repo(request: Request) -> SystemRepository:
+    return SystemRepository(request.app.state.pool)

@@ -30,6 +30,7 @@ class AlertEventType(str, Enum):
     STOP_LOSS_HIT = "position.stop_loss_hit"
     SYSTEM_FAILURE = "system.failure"
     ROLL_OPPORTUNITY = "position.roll_opportunity"
+    MODE_CHANGED = "system.mode_changed"
 
 
 class AlertEvent(BaseModel):

@@ -34,10 +34,25 @@ class SystemStatusResponse(BaseModel):
 
 
 class SystemModeResponse(BaseModel):
-    """Current trading mode and backend startup time."""
+    """Current trading mode and time of last mode change."""
     mode: TradingModeOut = Field(
-        description="paper or real, controlled by TRADING_MODE env var.",
+        description="Active trading mode (initial value from TRADING_MODE env, changeable via POST /system/mode).",
     )
     since: datetime = Field(
-        description="When the backend started (UTC).",
+        description="When the trading mode was last changed (UTC).",
+    )
+
+
+class SystemModeChangeRequest(BaseModel):
+    """Body for POST /system/mode — toggle the active trading mode."""
+    mode: TradingModeOut = Field(
+        description="The mode to switch to. Idempotent if equal to the current mode.",
+    )
+    confirmation_token: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "Required when mode='real'. Must equal the REAL_MODE_TOKEN constant. "
+            "Ignored when mode='paper'."
+        ),
     )

@@ -322,10 +322,100 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Trading mode and uptime
-         * @description Returns current trading mode (paper/real) and backend startup time.
+         * Trading mode and time of last change
+         * @description Returns the active trading mode and when it was last changed.
          */
         get: operations["mode_view_system_mode_get"];
+        put?: never;
+        /**
+         * Toggle trading mode (idempotent if mode unchanged)
+         * @description Toggle the active trading mode.
+         *
+         *     Idempotent: if body.mode equals the current mode, no DB write is
+         *     performed and no alert is emitted — returns the current state.
+         *
+         *     Going to 'real' requires confirmation_token == REAL_MODE_TOKEN.
+         *     Going back to 'paper' is free (no token required).
+         */
+        post: operations["mode_toggle_system_mode_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Agents
+         * @description List all agents with their config and runtime state.
+         */
+        get: operations["list_agents_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/{agent_id}/toggle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Toggle Agent
+         * @description Set agent is_active flag explicitly. Returns 404 if agent not found.
+         */
+        post: operations["toggle_agent_agents__agent_id__toggle_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Limits Config
+         * @description Return the raw contents of limits.yaml.
+         */
+        get: operations["get_limits_config_config_limits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/buckets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Buckets Config
+         * @description Return the raw contents of buckets.yaml.
+         */
+        get: operations["get_buckets_config_config_buckets_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -338,6 +428,47 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AgentItem
+         * @description Agent config + state combined for /agents endpoint.
+         */
+        AgentItem: {
+            /** Agent Id */
+            agent_id: string;
+            /** Display Name */
+            display_name: string;
+            /** Role */
+            role: string;
+            /** Time Horizon Min Days */
+            time_horizon_min_days?: number | null;
+            /** Time Horizon Max Days */
+            time_horizon_max_days?: number | null;
+            /** Default Llm Model */
+            default_llm_model: string;
+            /** Max Portfolio Pct */
+            max_portfolio_pct: string;
+            /** Is Active */
+            is_active: boolean;
+            /** Status */
+            status?: string | null;
+            /** Current Task */
+            current_task?: string | null;
+            /** Last Heartbeat */
+            last_heartbeat?: string | null;
+            /** Last Proposal At */
+            last_proposal_at?: string | null;
+            /** Last Error */
+            last_error?: string | null;
+            /** Error Count 24H */
+            error_count_24h?: number | null;
+            /** Llm Cost Today Usd */
+            llm_cost_today_usd?: string | null;
+        };
+        /** AgentsListResponse */
+        AgentsListResponse: {
+            /** Items */
+            items: components["schemas"]["AgentItem"][];
+        };
         /**
          * AssetClass
          * @enum {string}
@@ -544,20 +675,37 @@ export interface components {
          */
         StrategyType: "CSP" | "COVERED_CALL" | "CREDIT_SPREAD" | "DEBIT_SPREAD" | "IRON_CONDOR" | "LEAP" | "CALENDAR" | "SWING_EQUITY" | "CRYPTO_SPOT" | "ZERO_DTE" | "WEEKLY" | "SECTOR_ROTATION";
         /**
+         * SystemModeChangeRequest
+         * @description Body for POST /system/mode — toggle the active trading mode.
+         */
+        SystemModeChangeRequest: {
+            /**
+             * Mode
+             * @description The mode to switch to. Idempotent if equal to the current mode.
+             * @enum {string}
+             */
+            mode: "paper" | "real";
+            /**
+             * Confirmation Token
+             * @description Required when mode='real'. Must equal the REAL_MODE_TOKEN constant. Ignored when mode='paper'.
+             */
+            confirmation_token?: string | null;
+        };
+        /**
          * SystemModeResponse
-         * @description Current trading mode and backend startup time.
+         * @description Current trading mode and time of last mode change.
          */
         SystemModeResponse: {
             /**
              * Mode
-             * @description paper or real, controlled by TRADING_MODE env var.
+             * @description Active trading mode (initial value from TRADING_MODE env, changeable via POST /system/mode).
              * @enum {string}
              */
             mode: "paper" | "real";
             /**
              * Since
              * Format: date-time
-             * @description When the backend started (UTC).
+             * @description When the trading mode was last changed (UTC).
              */
             since: string;
         };
@@ -603,6 +751,18 @@ export interface components {
              * @description When the health checks were performed (UTC).
              */
             checked_at: string;
+        };
+        /** ToggleAgentRequest */
+        ToggleAgentRequest: {
+            /** Is Active */
+            is_active: boolean;
+        };
+        /** ToggleAgentResponse */
+        ToggleAgentResponse: {
+            /** Agent Id */
+            agent_id: string;
+            /** Is Active */
+            is_active: boolean;
         };
         /**
          * ValidateRequest
@@ -1175,6 +1335,138 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemModeResponse"];
+                };
+            };
+        };
+    };
+    mode_toggle_system_mode_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SystemModeChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemModeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agents_agents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentsListResponse"];
+                };
+            };
+        };
+    };
+    toggle_agent_agents__agent_id__toggle_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ToggleAgentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToggleAgentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_limits_config_config_limits_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    get_buckets_config_config_buckets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };

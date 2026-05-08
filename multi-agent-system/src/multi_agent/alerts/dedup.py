@@ -6,6 +6,7 @@ Dedup key patterns and TTLs:
   position.stop_loss_hit   → alerts:dedup:stop:{position_id}        365 days (never re-fire)
   system.failure           → alerts:dedup:sys:{component}           5 min
   position.roll_opportunity→ alerts:dedup:roll:{position_id}:{date} 24h
+  system.mode_changed      → alerts:dedup:mode:{to}:{ts_ms}         1s — every change fires
 
 is_duplicate() returns True if the event was already seen in the window.
 If True, the caller should skip dispatching to any sink.
@@ -25,6 +26,7 @@ _TTL: dict[str, int] = {
     AlertEventType.STOP_LOSS_HIT.value:    31_536_000,  # 365 days (effectively permanent)
     AlertEventType.SYSTEM_FAILURE.value:   300,         # 5 min
     AlertEventType.ROLL_OPPORTUNITY.value: 86_400,      # 24h
+    AlertEventType.MODE_CHANGED.value:     1,           # 1s — never dedup mode changes
 }
 
 
@@ -41,6 +43,8 @@ def make_dedup_key(event: AlertEvent) -> str:
     if t == AlertEventType.ROLL_OPPORTUNITY.value:
         date = p.get("expiry_date", "unknown")
         return f"alerts:dedup:roll:{p.get('position_id', 'unknown')}:{date}"
+    if t == AlertEventType.MODE_CHANGED.value:
+        return f"alerts:dedup:mode:{p.get('to', 'unknown')}:{int(event.created_at.timestamp() * 1000)}"
     return f"alerts:dedup:generic:{t}"
 
 

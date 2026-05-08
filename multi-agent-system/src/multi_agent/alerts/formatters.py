@@ -81,4 +81,10 @@ def _format_body(event: AlertEvent) -> str:
             f"*DTE:* {p.get('dte', 'N/A')}  "
             f"*IV:* {p.get('current_iv', 'N/A')}%"
         )
+    if t == AlertEventType.MODE_CHANGED:
+        return (
+            f"*From:* {_escape(p.get('from', 'N/A'))}\n"
+            f"*To:* {_escape(p.get('to', 'N/A'))}  "
+            f"*Source:* {_escape(p.get('source', 'N/A'))}"
+        )
     return ""
