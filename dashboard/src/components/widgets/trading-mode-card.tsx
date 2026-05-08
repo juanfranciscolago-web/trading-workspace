@@ -49,7 +49,6 @@ export function TradingModeCard() {
   }
 
   if (!data) return null
-  if (data.mode !== 'paper' && data.mode !== 'real') return null
 
   return (
     <Card style={{ borderLeft: `2px solid ${BORDER_COLOR[data.mode]}` }}>
