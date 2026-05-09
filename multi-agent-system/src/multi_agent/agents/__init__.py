@@ -4,12 +4,14 @@ from .apollo_mock import ApolloMock
 from .athena_mock import AthenaMock
 from .atlas_mock import AtlasMock
 from .base import BaseMockAgent, CycleResult, MockOrchestrator
+from .base_agent import BaseAgent
 from .fixtures import SCENARIOS, ScenarioDef
 from .hermes_mock import HermesMock
 from .nyx_mock import NyxMock
 from .vesta_mock import VestaMock
 
 __all__ = [
+    "BaseAgent",
     "BaseMockAgent",
     "CycleResult",
     "MockOrchestrator",
