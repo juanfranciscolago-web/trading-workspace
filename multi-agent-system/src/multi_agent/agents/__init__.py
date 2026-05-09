@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .apollo_mock import ApolloMock
+from .athena_agent import AthenaAgent
 from .athena_mock import AthenaMock
 from .atlas_mock import AtlasMock
 from .base import BaseMockAgent, CycleResult, MockOrchestrator
@@ -17,6 +18,7 @@ __all__ = [
     "MockOrchestrator",
     "ScenarioDef",
     "SCENARIOS",
+    "AthenaAgent",
     "AthenaMock",
     "ApolloMock",
     "HermesMock",

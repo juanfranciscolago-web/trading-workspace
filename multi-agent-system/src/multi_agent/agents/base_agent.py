@@ -34,10 +34,13 @@ class BaseAgent(ABC):
         self._claude_router = claude_router
 
     @abstractmethod
-    def generate_proposal(self, correlation_id: UUID) -> ProposalMessage:
-        """Generate a trading proposal for the current market state.
+    def generate_proposal(self, correlation_id: UUID) -> ProposalMessage | None:
+        """Generate a trading proposal, or return None if the agent declines.
 
         Concrete agents fetch their own market data (via injected data layer
         or similar) and call self._claude_router.send(...) to get the LLM
-        output, then parse and validate it into a ProposalMessage.
+        output, then parse and validate it into a ProposalMessage. Return
+        None when the LLM responds with a "no setup" decision (Shape B in
+        ATHENA's prompt convention) — the agent saw the market state but
+        declined to propose. Callers must handle both branches.
         """
