@@ -2,6 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { fetcher } from '@/lib/api-client'
+import { API_BASE_URL } from '@/lib/env'
 
 export interface Agent {
   agent_id: string
@@ -29,8 +30,6 @@ export interface ToggleAgentResponse {
   agent_id: string
   is_active: boolean
 }
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000'
 
 async function postToggle(agentId: string, isActive: boolean): Promise<ToggleAgentResponse> {
   const res = await fetch(`${API_BASE_URL}/agents/${encodeURIComponent(agentId)}/toggle`, {

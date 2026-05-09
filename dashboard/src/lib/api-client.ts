@@ -1,6 +1,5 @@
+import { API_BASE_URL } from '@/lib/env'
 import type { paths } from '@/types/api'
-
-const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000'
 
 /**
  * Extracts the application/json body of a 200 response for a given path+method.
@@ -35,7 +34,7 @@ export async function fetcher<T>(
   path: string,
   params?: Record<string, string | number | boolean>,
 ): Promise<T> {
-  const url = buildUrl(BASE_URL, path, params)
+  const url = buildUrl(API_BASE_URL, path, params)
   const res = await fetch(url)
   if (!res.ok) {
     throw new Error(`Fetch failed: ${res.status} ${res.statusText} (${path})`)

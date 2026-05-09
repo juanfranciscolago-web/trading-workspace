@@ -2,6 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { fetcher, type Json200 } from '@/lib/api-client'
+import { API_BASE_URL } from '@/lib/env'
 
 type SystemMode = Json200<'/system/mode', 'get'>
 
@@ -9,8 +10,6 @@ export interface ToggleModeRequest {
   mode: 'paper' | 'real'
   confirmation_token?: string
 }
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000'
 
 async function postModeChange(body: ToggleModeRequest): Promise<SystemMode> {
   const res = await fetch(`${API_BASE_URL}/system/mode`, {
