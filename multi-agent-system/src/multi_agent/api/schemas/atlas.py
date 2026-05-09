@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from shared_core.models import AssetClass
 from multi_agent.communication.enums import StrategyType
+
+
+RiskModeOut = Literal["GREEN", "YELLOW", "RED", "BLACK"]
 
 
 class ValidateRequest(BaseModel):
@@ -27,7 +32,7 @@ class ValidateResponse(BaseModel):
     executed_size_pct: float
     original_size_pct: float
     reason: str
-    risk_mode: str
+    risk_mode: RiskModeOut
     checks_passed: list[str]
     checks_failed: list[str]
     evaluation_time_ms: float
@@ -38,7 +43,7 @@ class ValidateResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-    risk_mode: str
+    risk_mode: RiskModeOut
     nav_usd: float
     snapshot_id: str
     ts: str  # ISO-8601

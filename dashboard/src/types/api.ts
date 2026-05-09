@@ -588,8 +588,11 @@ export interface components {
         HealthResponse: {
             /** Status */
             status: string;
-            /** Risk Mode */
-            risk_mode: string;
+            /**
+             * Risk Mode
+             * @enum {string}
+             */
+            risk_mode: "GREEN" | "YELLOW" | "RED" | "BLACK";
             /** Nav Usd */
             nav_usd: number;
             /** Snapshot Id */
@@ -805,8 +808,11 @@ export interface components {
             original_size_pct: number;
             /** Reason */
             reason: string;
-            /** Risk Mode */
-            risk_mode: string;
+            /**
+             * Risk Mode
+             * @enum {string}
+             */
+            risk_mode: "GREEN" | "YELLOW" | "RED" | "BLACK";
             /** Checks Passed */
             checks_passed: string[];
             /** Checks Failed */
@@ -845,7 +851,7 @@ export interface components {
             /** Checks Failed */
             checks_failed: string[] | null;
             /** Risk Mode */
-            risk_mode: string | null;
+            risk_mode: ("GREEN" | "YELLOW" | "RED" | "BLACK") | null;
             /** Created At */
             created_at: string | null;
             /** Metrics Snapshot */
@@ -889,7 +895,7 @@ export interface components {
             /** Checks Failed */
             checks_failed: string[] | null;
             /** Risk Mode */
-            risk_mode: string | null;
+            risk_mode: ("GREEN" | "YELLOW" | "RED" | "BLACK") | null;
             /** Created At */
             created_at: string | null;
         };

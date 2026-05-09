@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+
+RiskModeOut = Literal["GREEN", "YELLOW", "RED", "BLACK"]
 
 
 # ── Portfolio ──────────────────────────────────────────────────────────────────
@@ -56,7 +59,7 @@ class ValidationSummaryItem(BaseModel):
     evaluation_time_ms: float | None
     checks_passed: list[str] | None
     checks_failed: list[str] | None
-    risk_mode: str | None
+    risk_mode: RiskModeOut | None
     created_at: str | None
 
 

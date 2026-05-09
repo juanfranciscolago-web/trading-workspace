@@ -13,13 +13,6 @@ const RISK_BORDER: Record<string, string> = {
   BLACK: '#444',
 }
 
-const VALID_RISK_LEVELS = ['GREEN', 'YELLOW', 'RED', 'BLACK'] as const
-type RiskLevel = typeof VALID_RISK_LEVELS[number]
-
-function isValidRiskLevel(value: unknown): value is RiskLevel {
-  return typeof value === 'string' && (VALID_RISK_LEVELS as readonly string[]).includes(value)
-}
-
 export function RiskModeCard() {
   const { data, isLoading, isError, error } = useAtlasHealth()
 
@@ -42,8 +35,7 @@ export function RiskModeCard() {
   }
 
   if (!data) return null
-  const mode = data.risk_mode ?? 'BLACK'
-  if (!isValidRiskLevel(mode)) return null
+  const mode = data.risk_mode
 
   return (
     <Card style={{ borderLeft: `2px solid ${RISK_BORDER[mode]}` }}>
