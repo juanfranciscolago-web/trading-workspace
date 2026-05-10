@@ -11,8 +11,10 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,11 +28,13 @@ logger = logging.getLogger(__name__)
 async def _lifespan(app: FastAPI):
     """Initialize shared resources on startup; close on shutdown."""
     import asyncio
+    from claude_router.router import ClaudeRouter
     from shared_core.storage.postgres_pool import PostgresPool
     from multi_agent.risk.config import load_buckets, load_limits
     from multi_agent.risk.portfolio_snapshot import CachedSnapshotBuilder, SnapshotBuilder
     from multi_agent.observability.llm_cost_repository import LLMCostRepository
     from multi_agent.persistence.system_repository import SystemRepository
+    from multi_agent.data_layer import StubDataLayer
     from multi_agent.alerts.bus import AlertBus
     from multi_agent.alerts.dedup import AlertDedup
     from multi_agent.alerts.repository import AlertRepository
@@ -73,6 +77,20 @@ async def _lifespan(app: FastAPI):
         app.state.trading_mode["mode"],
         app.state.trading_mode["since"].isoformat(),
         app.state.trading_mode["source"],
+    )
+
+    # ATHENA real agent dependencies (Sprint 3 B.3.5).
+    # Config path: env override + project-root fallback (mirrors risk/config.py).
+    default_router_config = (
+        Path(__file__).resolve().parents[3]
+        / "claude_router" / "config" / "routing_rules.yaml"
+    )
+    router_config_path = os.environ.get("CLAUDE_ROUTER_CONFIG", str(default_router_config))
+    app.state.claude_router = ClaudeRouter.from_config(router_config_path)
+    app.state.data_layer = StubDataLayer()
+    logger.info(
+        "✓ ATHENA dependencies ready: claude_router (config=%s), data_layer=StubDataLayer",
+        router_config_path,
     )
 
     # Alert pipeline

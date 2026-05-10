@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import logging
+from uuid import UUID, uuid4
 
+from claude_router.router import ClaudeRouter
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from multi_agent.api.dependencies import get_agents_repo
+from multi_agent.agents.athena_agent import AthenaAgent
+from multi_agent.api.dependencies import (
+    get_agents_repo,
+    get_claude_router,
+    get_data_layer,
+    get_message_repo,
+)
 from multi_agent.api.schemas.responses import AgentItem, AgentsListResponse
+from multi_agent.communication.schemas import ProposalMessage
+from multi_agent.data_layer import DataLayer
 from multi_agent.persistence.agents_repository import AgentsRepository
+from multi_agent.persistence.message_repository import MessageRepository
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +32,18 @@ class ToggleAgentRequest(BaseModel):
 class ToggleAgentResponse(BaseModel):
     agent_id: str
     is_active: bool
+
+
+class TriggerAthenaResponse(BaseModel):
+    """Result of POST /agents/athena/trigger.
+
+    `proposal` is the generated proposal when ATHENA finds a setup, or None
+    when ATHENA declines (no_setup=True). `correlation_id` is generated
+    server-side per call.
+    """
+    correlation_id: UUID
+    proposal: ProposalMessage | None
+    no_setup: bool
 
 
 @router.get("", response_model=AgentsListResponse)
@@ -48,3 +71,47 @@ def toggle_agent(
         )
     logger.info("agent_toggled agent_id=%s is_active=%s", agent_id, body.is_active)
     return ToggleAgentResponse(agent_id=agent_id, is_active=body.is_active)
+
+
+@router.post("/athena/trigger", response_model=TriggerAthenaResponse)
+def trigger_athena(
+    claude_router: ClaudeRouter = Depends(get_claude_router),
+    data_layer: DataLayer = Depends(get_data_layer),
+    message_repo: MessageRepository = Depends(get_message_repo),
+) -> TriggerAthenaResponse:
+    """Trigger ATHENA to generate one proposal from current market state.
+
+    Returns the proposal if ATHENA finds a setup, or no_setup=True if
+    ATHENA declines (Shape B). The proposal is persisted to trades.proposals
+    when present; no persistence on no_setup.
+
+    Synchronous: blocks the request thread for the duration of the LLM call
+    (typically 5-30 seconds). Acceptable for Sprint 3 manual trigger; revisit
+    with async/queue if scaling matters in Sprint 5+.
+
+    Sprint 3 debate-only: ATLAS validation flows downstream but no execution.
+    """
+    correlation_id = uuid4()
+    logger.info("athena_trigger_start correlation_id=%s", correlation_id)
+
+    agent = AthenaAgent(claude_router, data_layer)
+    proposal = agent.generate_proposal(correlation_id)
+
+    if proposal is None:
+        logger.info("athena_trigger_no_setup correlation_id=%s", correlation_id)
+        return TriggerAthenaResponse(
+            correlation_id=correlation_id,
+            proposal=None,
+            no_setup=True,
+        )
+
+    message_repo.save_proposal(proposal)
+    logger.info(
+        "athena_trigger_persisted correlation_id=%s ticker=%s",
+        correlation_id, proposal.trade.ticker,
+    )
+    return TriggerAthenaResponse(
+        correlation_id=correlation_id,
+        proposal=proposal,
+        no_setup=False,
+    )
