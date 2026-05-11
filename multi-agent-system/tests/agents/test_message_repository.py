@@ -122,6 +122,68 @@ class TestRepositorySavesCritique:
         assert row[0] == "DISAGREE"
         assert row[1] is True
 
+    def test_save_critique_full_payload_roundtrips(self, repo, pool):
+        """save_critique → SELECT full_payload → CritiqueMessage.model_validate roundtrips
+        all fields, including those without dedicated columns (veto_request,
+        alternative_proposal, full argument body)."""
+        from uuid import uuid4
+        from multi_agent.communication.schemas import (
+            CritiqueArgument,
+            CritiqueMessage,
+            EvidenceItem,
+        )
+        from multi_agent.communication.enums import AgentId, Stance
+
+        original = CritiqueMessage(
+            correlation_id=uuid4(),
+            agent_id=AgentId.NYX,
+            stance=Stance.DISAGREE,
+            argument=CritiqueArgument(
+                summary="Narrative-reality gap narrower than thesis claims",
+                evidence=[
+                    EvidenceItem(claim="Put/call skew flat", data_source="cboe", value=0.92),
+                    EvidenceItem(claim="Insider buying minimal", data_source="form4_filings", value=3),
+                    EvidenceItem(claim="Sentiment z-score", data_source="aaii", value="-0.4"),
+                ],
+                concern="Crowded short positioning may already be priced in",
+                data_that_would_change_my_mind="Sustained put/call skew > 1.2 for 5 sessions",
+            ),
+            alternative_proposal={"strategy": "wait_for_confirmation", "delta_target": -0.20},
+            veto_request=True,
+            contrarian_flag_raised=True,
+        )
+
+        repo.save_critique(original)
+
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT full_payload FROM trades.critiques "
+                    "WHERE correlation_id = %s AND critique_agent = 'nyx'",
+                    (original.correlation_id,),
+                )
+                row = cur.fetchone()
+            conn.rollback()
+
+        assert row is not None
+        rebuilt = CritiqueMessage.model_validate(row[0])
+
+        # Whole-object equality (Pydantic v2 compares fields on frozen models).
+        assert rebuilt == original
+
+        # Explicit asserts on fields previously without column coverage —
+        # clearer failure messages if any of these ever drop from full_payload.
+        assert rebuilt.veto_request is True
+        assert rebuilt.alternative_proposal == {
+            "strategy": "wait_for_confirmation",
+            "delta_target": -0.20,
+        }
+        assert rebuilt.argument.concern == original.argument.concern
+        assert rebuilt.argument.data_that_would_change_my_mind == \
+            original.argument.data_that_would_change_my_mind
+        assert len(rebuilt.argument.evidence) == 3
+        assert rebuilt.argument.evidence[0].data_source == "cboe"
+
 
 class TestRepositorySavesDecision:
     def test_save_decision_inserts_both_tables(self, repo, scenario_and_result, pool):
@@ -140,6 +202,81 @@ class TestRepositorySavesDecision:
 
         assert row is not None
         assert row[0] == "APPROVED_WITH_CONDITIONS"
+
+    def test_save_decision_full_payload_roundtrips(self, repo, pool):
+        """save_decision → SELECT full_payload → DecisionMessage.model_validate roundtrips
+        all fields, including consensus_state membership, size_modulation, conditions,
+        and atlas_validation (none of which have dedicated columns beyond approved_size_pct)."""
+        from uuid import uuid4
+        from multi_agent.communication.schemas import (
+            AtlasValidationRef,
+            ConsensusState,
+            DecisionMessage,
+            SizeModulation,
+        )
+        from multi_agent.communication.enums import (
+            AgentId,
+            ConsensusType,
+            DecisionOutcome,
+        )
+
+        original = DecisionMessage(
+            correlation_id=uuid4(),
+            agent_id=AgentId.ATHENA,
+            outcome=DecisionOutcome.APPROVED_WITH_CONDITIONS,
+            consensus_state=ConsensusState(
+                agree=[AgentId.ATHENA, AgentId.APOLLO, AgentId.HERMES],
+                disagree=[AgentId.NYX],
+                neutral=[AgentId.VESTA],
+                consensus_type=ConsensusType.MAJORITY_WITH_PRODUCTIVE_DISAGREEMENT,
+            ),
+            size_modulation=SizeModulation(
+                original_size_pct=2.0,
+                approved_size_pct=1.2,
+                reduction_reason="NYX dissent + ATLAS beta-bucket near limit",
+            ),
+            conditions=[
+                "entry_only_above_vwap",
+                "stop_at_thesis_invalidation",
+                "exit_if_iv_collapses_below_25",
+            ],
+            atlas_validation=AtlasValidationRef(status="APPROVED"),
+        )
+
+        repo.save_decision(original)
+
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT full_payload FROM trades.decisions "
+                    "WHERE correlation_id = %s",
+                    (original.correlation_id,),
+                )
+                row = cur.fetchone()
+            conn.rollback()
+
+        assert row is not None
+        rebuilt = DecisionMessage.model_validate(row[0])
+
+        # Whole-object equality (Pydantic v2 compares fields on frozen models).
+        assert rebuilt == original
+
+        # Explicit asserts on fields previously without column coverage.
+        assert rebuilt.conditions == [
+            "entry_only_above_vwap",
+            "stop_at_thesis_invalidation",
+            "exit_if_iv_collapses_below_25",
+        ]
+        assert rebuilt.atlas_validation.status == "APPROVED"
+        assert rebuilt.size_modulation is not None
+        assert rebuilt.size_modulation.original_size_pct == 2.0
+        assert rebuilt.size_modulation.reduction_reason == \
+            "NYX dissent + ATLAS beta-bucket near limit"
+        assert rebuilt.consensus_state.agree == [
+            AgentId.ATHENA, AgentId.APOLLO, AgentId.HERMES,
+        ]
+        assert rebuilt.consensus_state.disagree == [AgentId.NYX]
+        assert rebuilt.consensus_state.neutral == [AgentId.VESTA]
 
 
 class TestRepositoryLogLlmCost:
