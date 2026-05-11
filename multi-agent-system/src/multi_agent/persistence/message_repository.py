@@ -82,8 +82,8 @@ class MessageRepository:
                         INSERT INTO trades.proposals
                             (correlation_id, proposing_agent, ticker, asset_class,
                              strategy_type, conviction_score, proposed_size_pct,
-                             proposed_size_usd, full_payload)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                             proposed_size_usd, time_horizon_days, full_payload)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             msg.correlation_id,
@@ -94,6 +94,7 @@ class MessageRepository:
                             msg.conviction_score,
                             float(msg.sizing.proposed_size_pct_portfolio),
                             float(msg.sizing.proposed_size_usd),
+                            msg.thesis.time_horizon_days,
                             self._to_json(msg),
                         ),
                     )
