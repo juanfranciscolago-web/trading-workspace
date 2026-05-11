@@ -4,6 +4,8 @@ Phase 3 consensus engine.
 Evaluates a list of critiques against the original proposal and
 produces a DecisionMessage. Rules (in priority order):
 
+  Veto (≥1 veto_request=True)                 → REJECTED, VETOED, size=None,
+                                                  conditions=["vetoed_by:{agent}", ...]
   Unanimous (4/4 AGREE)                       → APPROVED, full size
   Majority (3+ effective agree, 0 disagree)   → APPROVED, full size
   Productive dissent (3+ agree, 1 DISAGREE
@@ -13,6 +15,11 @@ produces a DecisionMessage. Rules (in priority order):
   Split (≤2 agree, ≥2 disagree)               → REJECTED
   No quorum (all NEUTRAL), conviction ≥ 90    → APPROVED_WITH_CONDITIONS, 33% size
   No quorum (all NEUTRAL), conviction < 90    → DEFERRED
+
+Every branch propagates contrarian_flag_raised = any(c.contrarian_flag_raised
+for c in critiques) to the DecisionMessage so ATLAS and the operator see
+the signal even when consensus-level rules dilute it (e.g. plain majority
+overriding a contrarian dissent).
 """
 from __future__ import annotations
 
@@ -42,8 +49,11 @@ def evaluate(
     disagree_ids: list[AgentId] = []
     neutral_ids: list[AgentId] = []
     contrarian_disagree_ids: list[AgentId] = []
+    veto_ids: list[AgentId] = []
 
     for c in critiques:
+        if c.veto_request:
+            veto_ids.append(c.agent_id)
         if c.stance in (Stance.AGREE, Stance.AGREE_WITH_CONDITIONS):
             agree_ids.append(c.agent_id)
         elif c.stance == Stance.DISAGREE:
@@ -58,10 +68,20 @@ def evaluate(
     n_neutral = len(neutral_ids)
     n_total = len(critiques)
     proposed_pct = proposal.sizing.proposed_size_pct_portfolio
+    contrarian_flag_raised = any(c.contrarian_flag_raised for c in critiques)
 
     # ── Determine consensus type and outcome ──────────────────────────────────
 
-    if n_agree == n_total:
+    if veto_ids:
+        # Veto wins regardless of vote distribution. ATLAS sees the veto list
+        # via conditions; consensus_state retains the full vote tally for audit.
+        consensus_type = ConsensusType.VETOED
+        outcome = DecisionOutcome.REJECTED
+        approved_pct = 0.0
+        conditions = [f"vetoed_by:{a.value}" for a in veto_ids]
+        size_modulation = None
+
+    elif n_agree == n_total:
         consensus_type = ConsensusType.UNANIMOUS
         outcome = DecisionOutcome.APPROVED
         approved_pct = proposed_pct
@@ -148,4 +168,5 @@ def evaluate(
         consensus_state=consensus_state,
         size_modulation=size_modulation,
         conditions=conditions,
+        contrarian_flag_raised=contrarian_flag_raised,
     )

@@ -33,3 +33,4 @@ class DecisionMessage(BaseMessage):
     size_modulation: SizeModulation | None = None
     conditions: list[str] = Field(default_factory=list)
     atlas_validation: AtlasValidationRef = Field(default_factory=AtlasValidationRef)
+    contrarian_flag_raised: bool = False

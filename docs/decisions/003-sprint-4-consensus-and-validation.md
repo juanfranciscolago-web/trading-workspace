@@ -135,6 +135,42 @@ Siete decisiones arquitectónicas para Sprint 4.
 | **D5.2** | **Algorithmic determinístico** | **Elegida: predecible, testeable, sin costo LLM. Reglas explícitas auditables.** |
 | D5.3 | Human-in-the-loop (operador decide cada vez) | Friction operativa; opone "trigger 1 botón" de D4. |
 
+**Updated 2026-05-11 (B.4.3 reconciliation):**
+
+Cuando B.4.3 empezó, `src/multi_agent/agents/consensus.py` ya implementaba
+un ruleset más rico que los 4 bullets de "Lógica concreta" arriba (heredado
+de Sprint 1-3). Dos gaps reales quedaban:
+
+1. **`veto_request` se ignoraba.** Una crítica con `(stance=DISAGREE,
+   veto_request=True)` fluía a la rama de plain majority dissent y aprobaba
+   el trade a tamaño completo.
+2. **`contrarian_flag_raised` no se exponía en `DecisionMessage`.** El
+   bullet 4 de D5 decía que el flag debía ser visible para ATLAS; la
+   implementación solo lo embebía en strings de `conditions` en la rama
+   de productive dissent.
+
+Este update cierra ambos gaps sin downgrade del ruleset rico ya shipping.
+
+**Cambios:**
+- Veto branch agregada al inicio de la priority chain de `evaluate()`.
+  Schema: nuevo miembro `ConsensusType.VETOED`; conditions con formato
+  `["vetoed_by:{agent_id}", ...]`.
+- Field nuevo `DecisionMessage.contrarian_flag_raised: bool = False`.
+  Se popula como `any(c.contrarian_flag_raised for c in critiques)` en
+  TODAS las ramas (ATLAS ve la señal incluso cuando reglas consensus-level
+  absorben el dissent).
+
+Las 8 branches efectivas en orden de prioridad están documentadas en el
+docstring de `consensus.evaluate` en `src/multi_agent/agents/consensus.py`.
+Ese docstring es la referencia canónica; este ADR captura solo el rationale.
+
+**Tests:**
+- `tests/agents/test_consensus.py::TestVetoRequest` (3 tests: single veto,
+  multiple vetos, veto overrides majority).
+- `tests/agents/test_consensus.py::TestContrarianFlagPropagation` (3 tests:
+  flag propagates when raised, default-False when none, veto+contrarian
+  edge case).
+
 ### D6. ATLAS implementation
 
 **Decisión:** Mantener ATLAS rule-based existente. NO reemplazar con LLM.

@@ -80,6 +80,7 @@ class ConsensusType(str, Enum):
     MAJORITY_WITH_PRODUCTIVE_DISAGREEMENT = "MAJORITY_WITH_PRODUCTIVE_DISAGREEMENT"
     SPLIT = "SPLIT"
     NO_QUORUM = "NO_QUORUM"
+    VETOED = "VETOED"
 
 
 class AtlasDecision(str, Enum):
