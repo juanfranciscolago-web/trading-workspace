@@ -15,6 +15,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
     title: 'VIEWS',
     items: [
       { label: 'Home', href: '/' },
+      { label: 'Proposals', href: '/proposals' },
       { label: 'Portfolio', href: '/portfolio' },
       { label: 'Risk', href: '/risk' },
     ],
