@@ -140,6 +140,8 @@ trading-workspace/
 
 14. **Fail closed por default.** Si algo del sistema de riesgo falla, bloqueá el trade. Nunca apruebes en duda.
 
+15. **Verificá realidad antes de escribir spec.** Antes de redactar un ADR/spec/plan que asuma cómo está implementado algo, inspeccioná el código existente y los tests pasando. Si la realidad difiere de la asunción, documentá el gap y proponé augment vs. downgrade explícitamente antes de implementar. (B.4.3, 2026-05-11)
+
 ---
 
 ## 🎯 Reglas de Uso de Modelos LLM
