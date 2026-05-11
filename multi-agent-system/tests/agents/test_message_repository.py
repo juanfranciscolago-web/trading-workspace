@@ -170,3 +170,67 @@ class TestRepositoryLogLlmCost:
         assert row is not None
         assert row[0] == 1200
         assert row[1] == "high"
+
+
+class TestRepositoryListProposals:
+
+    def test_list_returns_saved_proposal(self, repo, scenario_and_result):
+        """Default list (no filter) returns the just-saved proposal."""
+        _, result = scenario_and_result
+        repo.save_proposal(result.proposal)
+        rows = repo.list_proposals(limit=100)
+        saved_corr = str(result.proposal.correlation_id)
+        assert any(str(r["correlation_id"]) == saved_corr for r in rows)
+
+    def test_list_filter_by_agent_id(self, repo, scenario_and_result):
+        """Filter by agent_id returns only rows from that agent."""
+        _, result = scenario_and_result
+        repo.save_proposal(result.proposal)
+        agent_id = result.proposal.agent_id.value.lower()
+        rows = repo.list_proposals(agent_id=agent_id, limit=100)
+        assert rows  # at least the one we saved
+        assert all(r["proposing_agent"] == agent_id for r in rows)
+
+    def test_list_respects_limit(self, repo, scenario_and_result):
+        """limit=1 returns exactly 1 row (we just inserted at least one)."""
+        _, result = scenario_and_result
+        repo.save_proposal(result.proposal)
+        rows = repo.list_proposals(limit=1)
+        assert len(rows) == 1
+
+    def test_list_filter_by_days_recent(self, repo, scenario_and_result):
+        """A just-saved proposal is within the days=1 window."""
+        _, result = scenario_and_result
+        repo.save_proposal(result.proposal)
+        rows = repo.list_proposals(days=1, limit=100)
+        saved_corr = str(result.proposal.correlation_id)
+        assert any(str(r["correlation_id"]) == saved_corr for r in rows)
+
+
+class TestRepositoryGetProposalByCorrelationId:
+
+    def test_get_returns_saved_proposal(self, repo, scenario_and_result):
+        """get_proposal_by_correlation_id finds the just-saved proposal."""
+        _, result = scenario_and_result
+        repo.save_proposal(result.proposal)
+        row = repo.get_proposal_by_correlation_id(result.proposal.correlation_id)
+        assert row is not None
+        assert str(row["correlation_id"]) == str(result.proposal.correlation_id)
+        assert "full_payload" in row
+
+    def test_get_returns_none_for_unknown(self, repo):
+        """Random unknown UUID returns None (not exception)."""
+        from uuid import uuid4
+        row = repo.get_proposal_by_correlation_id(uuid4())
+        assert row is None
+
+    def test_get_full_payload_roundtrips_to_proposal_message(self, repo, scenario_and_result):
+        """save → get → ProposalMessage.model_validate (symmetric to _to_json)."""
+        from multi_agent.communication.schemas import ProposalMessage
+        _, result = scenario_and_result
+        repo.save_proposal(result.proposal)
+        row = repo.get_proposal_by_correlation_id(result.proposal.correlation_id)
+        rebuilt = ProposalMessage.model_validate(row["full_payload"])
+        assert rebuilt.correlation_id == result.proposal.correlation_id
+        assert rebuilt.trade.ticker == result.proposal.trade.ticker
+        assert rebuilt.conviction_score == result.proposal.conviction_score

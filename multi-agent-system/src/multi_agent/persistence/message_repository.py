@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import json as _json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from multi_agent.communication.schemas import (
@@ -24,6 +24,13 @@ from multi_agent.communication.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_uuid(value) -> str:
+    """Accept str or UUID; return str for psycopg3."""
+    if isinstance(value, UUID):
+        return str(value)
+    return str(value)
 
 
 class MessageRepository:
@@ -356,3 +363,76 @@ class MessageRepository:
             except Exception:
                 conn.rollback()
                 raise
+
+    # ── read methods (Sprint 3 B.3.6) ─────────────────────────────────────────
+
+    def list_proposals(
+        self,
+        days: int = 7,
+        limit: int = 50,
+        agent_id: str | None = None,
+    ) -> list[dict]:
+        """
+        Return recent proposals from trades.proposals (extracted columns only).
+
+        Filter by agent_id (case-insensitive: lowercased before WHERE) and by
+        time window (created_at >= now - days). Ordered by created_at DESC.
+
+        full_payload JSONB is intentionally excluded — use
+        get_proposal_by_correlation_id for the full ProposalMessage payload.
+        """
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        with self._pool.cursor() as cur:
+            if agent_id is None:
+                cur.execute(
+                    """
+                    SELECT correlation_id, proposing_agent, ticker, asset_class,
+                           strategy_type, conviction_score, proposed_size_pct,
+                           proposed_size_usd, time_horizon_days, status, created_at
+                    FROM trades.proposals
+                    WHERE created_at >= %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (since, limit),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT correlation_id, proposing_agent, ticker, asset_class,
+                           strategy_type, conviction_score, proposed_size_pct,
+                           proposed_size_usd, time_horizon_days, status, created_at
+                    FROM trades.proposals
+                    WHERE proposing_agent = %s
+                      AND created_at >= %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (agent_id.lower(), since, limit),
+                )
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description] if rows else []
+        return [dict(zip(cols, r)) for r in rows]
+
+    def get_proposal_by_correlation_id(self, correlation_id) -> dict | None:
+        """
+        Return full proposal row (including full_payload JSONB) or None.
+
+        Used by the detail endpoint to reconstruct the ProposalMessage via
+        ProposalMessage.model_validate(row["full_payload"]).
+        """
+        with self._pool.cursor() as cur:
+            cur.execute(
+                """
+                SELECT correlation_id, proposing_agent, ticker, asset_class,
+                       strategy_type, conviction_score, proposed_size_pct,
+                       proposed_size_usd, time_horizon_days, status,
+                       full_payload, created_at
+                FROM trades.proposals
+                WHERE correlation_id = %s
+                """,
+                (_coerce_uuid(correlation_id),),
+            )
+            row = cur.fetchone()
+            cols = [d[0] for d in cur.description] if row else []
+        return dict(zip(cols, row)) if row else None

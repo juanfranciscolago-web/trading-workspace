@@ -72,6 +72,27 @@ class ValidationsListResponse(BaseModel):
     count: int
 
 
+# ── Trades / Proposals ─────────────────────────────────────────────────────────
+
+class ProposalSummaryItem(BaseModel):
+    correlation_id: str
+    proposing_agent: str
+    ticker: str
+    asset_class: str
+    strategy_type: str
+    conviction_score: int | None
+    proposed_size_pct: float | None
+    proposed_size_usd: float | None
+    time_horizon_days: int | None
+    status: str
+    created_at: str
+
+
+class ProposalsListResponse(BaseModel):
+    items: list[ProposalSummaryItem]
+    count: int
+
+
 # ── Costs ──────────────────────────────────────────────────────────────────────
 
 class CostSummaryResponse(BaseModel):
