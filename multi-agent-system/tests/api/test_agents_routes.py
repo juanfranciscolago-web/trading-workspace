@@ -60,14 +60,15 @@ def _make_client(agents=None, set_active_result=True):
 def _make_client_with_mocks(
     proposal_response_text: str | None = None,
 ):
-    """Build a TestClient with the 3 trigger-endpoint deps mocked.
+    """Build a TestClient with the 4 trigger-endpoint deps mocked.
 
-    Returns (client, mock_router, mock_data_layer, mock_message_repo).
+    Returns (client, mock_router, mock_data_layer, mock_message_repo, mock_bus).
     """
     from multi_agent.api.app import create_app
     from multi_agent.api.dependencies import (
         get_claude_router,
         get_data_layer,
+        get_message_bus,
         get_message_repo,
     )
 
@@ -95,12 +96,14 @@ def _make_client_with_mocks(
     mock_data_layer.snapshot.return_value = mock_state
 
     mock_message_repo = MagicMock()
+    mock_bus = MagicMock()
 
     app.dependency_overrides[get_claude_router] = lambda: mock_router
     app.dependency_overrides[get_data_layer] = lambda: mock_data_layer
     app.dependency_overrides[get_message_repo] = lambda: mock_message_repo
+    app.dependency_overrides[get_message_bus] = lambda: mock_bus
 
-    return TestClient(app), mock_router, mock_data_layer, mock_message_repo
+    return TestClient(app), mock_router, mock_data_layer, mock_message_repo, mock_bus
 
 
 # ── GET /agents ───────────────────────────────────────────────────────────────
@@ -223,7 +226,7 @@ _SHAPE_B_JSON = json.dumps({
 class TestAthenaTrigger:
 
     def test_trigger_shape_a_returns_proposal(self):
-        client, _, _, _ = _make_client_with_mocks(_SHAPE_A_JSON)
+        client, _, _, _, _ = _make_client_with_mocks(_SHAPE_A_JSON)
         r = client.post("/agents/athena/trigger")
         assert r.status_code == 200
         data = r.json()
@@ -232,12 +235,12 @@ class TestAthenaTrigger:
         assert data["proposal"]["trade"]["ticker"] == "SPY"
 
     def test_trigger_shape_a_persists_proposal(self):
-        client, _, _, mock_message_repo = _make_client_with_mocks(_SHAPE_A_JSON)
+        client, _, _, mock_message_repo, _ = _make_client_with_mocks(_SHAPE_A_JSON)
         client.post("/agents/athena/trigger")
         mock_message_repo.save_proposal.assert_called_once()
 
     def test_trigger_shape_b_returns_no_setup(self):
-        client, _, _, _ = _make_client_with_mocks(_SHAPE_B_JSON)
+        client, _, _, _, _ = _make_client_with_mocks(_SHAPE_B_JSON)
         r = client.post("/agents/athena/trigger")
         assert r.status_code == 200
         data = r.json()
@@ -245,12 +248,45 @@ class TestAthenaTrigger:
         assert data["proposal"] is None
 
     def test_trigger_shape_b_does_not_persist(self):
-        client, _, _, mock_message_repo = _make_client_with_mocks(_SHAPE_B_JSON)
+        client, _, _, mock_message_repo, _ = _make_client_with_mocks(_SHAPE_B_JSON)
         client.post("/agents/athena/trigger")
         mock_message_repo.save_proposal.assert_not_called()
 
     def test_trigger_correlation_id_propagated(self):
-        client, _, _, _ = _make_client_with_mocks(_SHAPE_A_JSON)
+        client, _, _, _, _ = _make_client_with_mocks(_SHAPE_A_JSON)
         data = client.post("/agents/athena/trigger").json()
         # Top-level correlation_id matches the proposal's correlation_id
         assert data["correlation_id"] == data["proposal"]["correlation_id"]
+
+    def test_trigger_athena_publishes_to_bus_when_proposal_present(self):
+        """Decision A1 + verification of B.4.4 gap closure: after save_proposal,
+        endpoint must publish the same ProposalMessage to agent.proposals."""
+        from multi_agent.communication.message_bus import AgentChannels
+        from multi_agent.communication.schemas import ProposalMessage
+
+        client, _, _, _, mock_bus = _make_client_with_mocks(_SHAPE_A_JSON)
+        client.post("/agents/athena/trigger")
+
+        mock_bus.publish.assert_called_once()
+        args = mock_bus.publish.call_args.args
+        assert args[0] == AgentChannels.PROPOSALS
+        assert isinstance(args[1], ProposalMessage)
+
+    def test_trigger_athena_does_not_publish_on_no_setup(self):
+        """no_setup path skips persistence AND publish — no proposal exists
+        to send to the worker chain."""
+        client, _, _, _, mock_bus = _make_client_with_mocks(_SHAPE_B_JSON)
+        client.post("/agents/athena/trigger")
+        mock_bus.publish.assert_not_called()
+
+    def test_trigger_athena_publish_failure_is_fail_loud(self):
+        """Decision D-a: bus.publish failure bubbles up (no silent swallow).
+        TestClient with default raise_server_exceptions=True re-raises; in
+        production FastAPI converts unhandled exceptions to HTTP 500.
+        save_proposal must have been called before the failure so the
+        proposal is in the DB and recoverable."""
+        client, _, _, mock_message_repo, mock_bus = _make_client_with_mocks(_SHAPE_A_JSON)
+        mock_bus.publish.side_effect = RuntimeError("Redis unavailable")
+        with pytest.raises(RuntimeError, match="Redis unavailable"):
+            client.post("/agents/athena/trigger")
+        mock_message_repo.save_proposal.assert_called_once()

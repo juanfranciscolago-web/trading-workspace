@@ -19,6 +19,7 @@ from multi_agent.risk.portfolio_snapshot import CachedSnapshotBuilder
 from multi_agent.persistence.system_repository import SystemRepository
 from multi_agent.data_layer import DataLayer
 from multi_agent.persistence.message_repository import MessageRepository
+from multi_agent.communication.message_bus import AgentMessageBus
 
 
 def get_pool(request: Request):
@@ -67,3 +68,7 @@ def get_data_layer(request: Request) -> DataLayer:
 
 def get_message_repo(request: Request) -> MessageRepository:
     return MessageRepository(request.app.state.pool)
+
+
+def get_message_bus(request: Request) -> AgentMessageBus:
+    return request.app.state.message_bus

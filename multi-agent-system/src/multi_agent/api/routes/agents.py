@@ -12,9 +12,11 @@ from multi_agent.api.dependencies import (
     get_agents_repo,
     get_claude_router,
     get_data_layer,
+    get_message_bus,
     get_message_repo,
 )
 from multi_agent.api.schemas.responses import AgentItem, AgentsListResponse
+from multi_agent.communication.message_bus import AgentChannels, AgentMessageBus
 from multi_agent.communication.schemas import ProposalMessage
 from multi_agent.data_layer import DataLayer
 from multi_agent.persistence.agents_repository import AgentsRepository
@@ -78,16 +80,26 @@ def trigger_athena(
     claude_router: ClaudeRouter = Depends(get_claude_router),
     data_layer: DataLayer = Depends(get_data_layer),
     message_repo: MessageRepository = Depends(get_message_repo),
+    bus: AgentMessageBus = Depends(get_message_bus),
 ) -> TriggerAthenaResponse:
     """Trigger ATHENA to generate one proposal from current market state.
 
     Returns the proposal if ATHENA finds a setup, or no_setup=True if
-    ATHENA declines (Shape B). The proposal is persisted to trades.proposals
-    when present; no persistence on no_setup.
+    ATHENA declines (Shape B). When a proposal is found, it is persisted to
+    trades.proposals AND published to agent.proposals bus so the downstream
+    worker chain (APOLLO critic, ConsensusEngine, ATLAS validator) can pick
+    it up. No persistence or publish on no_setup.
 
-    Synchronous: blocks the request thread for the duration of the LLM call
-    (typically 5-30 seconds). Acceptable for Sprint 3 manual trigger; revisit
-    with async/queue if scaling matters in Sprint 5+.
+    Synchronous up to the publish step (ATHENA LLM call: 5-30s, then DB
+    insert + Redis XADD). Returns once the proposal is on the bus. The
+    workers consume asynchronously and transition proposal.status
+    independently — the caller polls to observe pipeline progress.
+
+    The publish step is fail-loud (Sprint 4 B.4.4 decision D-a): if Redis
+    is unavailable, the exception bubbles up as a 500. The proposal will
+    be in the DB but not on the bus; the operator decides whether to
+    retry the trigger or treat the proposal as orphan. This is intentional
+    — silent-publish-failure would leave proposals dangling forever.
 
     Sprint 3 debate-only: ATLAS validation flows downstream but no execution.
     """
@@ -106,8 +118,9 @@ def trigger_athena(
         )
 
     message_repo.save_proposal(proposal)
+    bus.publish(AgentChannels.PROPOSALS, proposal)
     logger.info(
-        "athena_trigger_persisted correlation_id=%s ticker=%s",
+        "athena_trigger_persisted_and_published correlation_id=%s ticker=%s",
         correlation_id, proposal.trade.ticker,
     )
     return TriggerAthenaResponse(

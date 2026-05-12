@@ -93,6 +93,16 @@ async def _lifespan(app: FastAPI):
         router_config_path,
     )
 
+    # Agent message bus (Sprint 4 B.4.4) — Redis-backed pub/sub for the
+    # trigger → workers chain. decode_responses=False keeps bytes payloads
+    # so AgentMessageBus can serialize Pydantic models for XADD.
+    import redis
+    from multi_agent.communication.message_bus import AgentMessageBus
+    redis_client = redis.from_url(settings.REDIS_URL, decode_responses=False)
+    app.state.redis_client = redis_client
+    app.state.message_bus = AgentMessageBus(redis_client)
+    logger.info("✓ AgentMessageBus ready (REDIS_URL=%s)", settings.REDIS_URL)
+
     # Alert pipeline
     alert_bus = AlertBus()
     alert_repo = AlertRepository(pool)
@@ -161,6 +171,12 @@ async def _lifespan(app: FastAPI):
         )
     except (asyncio.TimeoutError, asyncio.CancelledError):
         logger.warning("Alert workers did not stop cleanly within 10s")
+
+    try:
+        app.state.redis_client.close()
+        logger.info("Redis client (agent message bus) closed")
+    except Exception:
+        logger.exception("Redis client shutdown error (continuing)")
 
     pool.close_all()
     logger.info("API shutdown complete")
