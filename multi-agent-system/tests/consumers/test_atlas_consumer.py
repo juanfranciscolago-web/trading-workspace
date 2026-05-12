@@ -55,6 +55,12 @@ class SpyRepo:
     def save_rejected_dlq(self, **kwargs):
         self.rejected_dlqs.append(kwargs)
 
+    def get_proposal_by_correlation_id(self, correlation_id):
+        # F1 fallback (Sprint 4 B.4.5a): AtlasConsumer falls back to DB
+        # lookup on cache miss. SpyRepo simulates a DB miss so cache-miss
+        # tests still exercise the fail-closed path.
+        return None
+
 
 class FakeSnapshotBuilder:
     def __init__(self, snapshot: PortfolioSnapshot):

@@ -90,8 +90,18 @@ class AtlasConsumer:
 
         proposal = self._proposal_cache.get(str(corr))
         if proposal is None:
+            # F1 fallback (Sprint 4 B.4.5a): cache miss falls back to DB
+            # lookup so the API-lifespan path (which doesn't populate the
+            # cache) works. The cache remains a valid fast-path for callers
+            # that opt in (e.g. run_async_cycle.py via cache_proposal).
+            row = self._repo.get_proposal_by_correlation_id(corr)
+            if row is not None:
+                proposal = ProposalMessage.model_validate(row["full_payload"])
+
+        if proposal is None:
             logger.error(
-                "No proposal in cache for corr=%s — cannot validate (reject fail-closed)",
+                "No proposal for corr=%s in cache or DB — cannot validate "
+                "(reject fail-closed)",
                 corr,
             )
             return

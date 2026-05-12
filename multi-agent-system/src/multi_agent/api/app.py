@@ -103,6 +103,47 @@ async def _lifespan(app: FastAPI):
     app.state.message_bus = AgentMessageBus(redis_client)
     logger.info("✓ AgentMessageBus ready (REDIS_URL=%s)", settings.REDIS_URL)
 
+    # Worker chain (Sprint 4 B.4.5a) — consumers that process the debate
+    # pipeline async after the trigger endpoint publishes a proposal.
+    # ApolloConsumer reads PROPOSALS → APOLLO LLM → publishes CRITIQUES.
+    # ConsensusConsumer reads CRITIQUES → consensus.evaluate → publishes
+    # DECISIONS. AtlasConsumer reads DECISIONS → atlas_core.validate →
+    # publishes ATLAS_VALIDATION. AtlasConsumer was migrated from
+    # run_async_cycle.py to the API lifespan in B.4.5a (G1 decision);
+    # running both processes in parallel is unsupported in Sprint 4.
+    from multi_agent.consumers import ApolloConsumer, AtlasConsumer, ConsensusConsumer
+    from multi_agent.persistence.message_repository import MessageRepository
+
+    shared_repo = MessageRepository(pool)
+
+    apollo_consumer = ApolloConsumer.build(
+        bus=app.state.message_bus,
+        repo=shared_repo,
+        claude_router=app.state.claude_router,
+        data_layer=app.state.data_layer,
+    )
+    apollo_consumer.start()
+    app.state.apollo_consumer = apollo_consumer
+
+    consensus_consumer = ConsensusConsumer.build(
+        bus=app.state.message_bus,
+        repo=shared_repo,
+    )
+    consensus_consumer.start()
+    app.state.consensus_consumer = consensus_consumer
+
+    atlas_consumer = AtlasConsumer.build(
+        bus=app.state.message_bus,
+        repo=shared_repo,
+        pool=pool,
+    )
+    atlas_consumer.start()
+    app.state.atlas_consumer = atlas_consumer
+
+    # Spawn the daemon threads now that all subscriptions are registered.
+    app.state.message_bus.start()
+    logger.info("✓ Worker chain started: Apollo + Consensus + Atlas consumers")
+
     # Alert pipeline
     alert_bus = AlertBus()
     alert_repo = AlertRepository(pool)
@@ -171,6 +212,14 @@ async def _lifespan(app: FastAPI):
         )
     except (asyncio.TimeoutError, asyncio.CancelledError):
         logger.warning("Alert workers did not stop cleanly within 10s")
+
+    # Stop worker chain threads first (so in-flight messages complete
+    # before Redis closes underneath them).
+    try:
+        app.state.message_bus.stop()
+        logger.info("Worker chain stopped (Apollo + Consensus + Atlas)")
+    except Exception:
+        logger.exception("Worker chain shutdown error (continuing)")
 
     try:
         app.state.redis_client.close()

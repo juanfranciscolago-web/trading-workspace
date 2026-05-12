@@ -57,6 +57,7 @@ class ConsumerGroups:
     """Predefined consumer group names (one group = one logical reader role)."""
     ATLAS_VALIDATOR = "atlas_validator"
     CRITIQUE_ENGINE  = "critique_engine"
+    CONSENSUS_ENGINE = "consensus_engine"
     AUDIT_LOGGER    = "audit_logger"
     DASHBOARD       = "dashboard"
 

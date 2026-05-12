@@ -104,6 +104,52 @@ class MessageRepository:
                 raise
         logger.info("Saved proposal %s (corr=%s)", msg.message_id, msg.correlation_id)
 
+    def update_proposal_status(
+        self,
+        correlation_id,
+        status: str,
+    ) -> None:
+        """
+        Update trades.proposals.status for a given correlation_id.
+
+        Used by the worker chain (Sprint 4 B.4.5) to advance the proposal
+        through its lifecycle: pending → under_critique → decided →
+        atlas_validated (or rejected). The DB schema has status as a free
+        VARCHAR (no Python enum); valid values are documented in the SQL
+        schema comment for trades.proposals.status. Validation is the
+        caller's responsibility — this method passes the status through
+        to the DB without enum checks.
+
+        Logs a warning if no row matched the correlation_id and continues
+        silently (the proposal may have been deleted, never persisted, or
+        this is a stale message from the bus DLQ).
+        """
+        with self._pool.connection() as conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE trades.proposals SET status = %s "
+                        "WHERE correlation_id = %s",
+                        (status, correlation_id),
+                    )
+                    rowcount = cur.rowcount
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        if rowcount == 0:
+            logger.warning(
+                "update_proposal_status: no proposal found for correlation_id=%s "
+                "(status=%s); pipeline may proceed but proposal row is missing",
+                correlation_id, status,
+            )
+        else:
+            logger.info(
+                "update_proposal_status: correlation_id=%s status=%s",
+                correlation_id, status,
+            )
+
     def save_critique(
         self,
         msg: CritiqueMessage,
