@@ -293,3 +293,203 @@ class TestGetProposal:
         r = client.get(f"/trades/proposals/{_VALID_PROPOSAL_UUID}")
         assert r.status_code == 404
         assert r.json()["detail"] == "proposal not found"
+
+# ── Fixtures: Critiques / Decisions / Atlas Validations (Sprint 4 B.4.6) ──────
+
+def _make_critique(corr_id: str = _VALID_PROPOSAL_UUID) -> "CritiqueMessage":
+    """Build a valid CritiqueMessage for use as a mock return value."""
+    from multi_agent.communication.schemas import CritiqueArgument, CritiqueMessage
+    from multi_agent.communication.enums import AgentId, Stance
+    return CritiqueMessage(
+        correlation_id=UUID(corr_id),
+        agent_id=AgentId.APOLLO,
+        stance=Stance.AGREE,
+        argument=CritiqueArgument(
+            summary="macro tailwind",
+            concern="watch FOMC",
+            data_that_would_change_my_mind="VIX > 25",
+        ),
+        veto_request=False,
+        contrarian_flag_raised=False,
+    )
+
+
+def _make_decision(corr_id: str = _VALID_PROPOSAL_UUID) -> "DecisionMessage":
+    """Build a valid DecisionMessage for use as a mock return value."""
+    from multi_agent.communication.schemas import ConsensusState, DecisionMessage
+    from multi_agent.communication.enums import AgentId, ConsensusType, DecisionOutcome
+    return DecisionMessage(
+        correlation_id=UUID(corr_id),
+        agent_id=AgentId.ATLAS,
+        outcome=DecisionOutcome.APPROVED,
+        consensus_state=ConsensusState(
+            agree=[AgentId.APOLLO],
+            consensus_type=ConsensusType.UNANIMOUS,
+        ),
+    )
+
+
+def _make_atlas_validation(corr_id: str = _VALID_PROPOSAL_UUID) -> "AtlasValidationMessage":
+    """Build a valid AtlasValidationMessage for use as a mock return value."""
+    from decimal import Decimal
+    from multi_agent.communication.schemas import AtlasValidationMessage
+    from multi_agent.communication.enums import AgentId, RiskMode
+    return AtlasValidationMessage(
+        correlation_id=UUID(corr_id),
+        agent_id=AgentId.ATLAS,
+        atlas_version="atlas-1.0",
+        approved=True,
+        executed_size=Decimal("2.5"),
+        original_size=Decimal("2.5"),
+        reason="approved",
+        risk_mode=RiskMode.GREEN,
+        portfolio_snapshot_id="a" * 64,
+        evaluation_time_ms=1.5,
+    )
+
+
+def _make_pipeline_client(
+    *,
+    proposal_row=None,
+    critiques=None,
+    decision=None,
+    atlas_validation=None,
+):
+    """Build a TestClient with the 4 pipeline-relevant repo methods mocked."""
+    from multi_agent.api.app import create_app
+    from multi_agent.api.dependencies import get_message_repo
+
+    app = create_app()
+    mock_repo = MagicMock()
+    mock_repo.get_proposal_by_correlation_id.return_value = proposal_row
+    mock_repo.list_critiques_by_correlation_id.return_value = critiques or []
+    mock_repo.get_decision_by_correlation_id.return_value = decision
+    mock_repo.get_atlas_validation_by_correlation_id.return_value = atlas_validation
+
+    app.dependency_overrides[get_message_repo] = lambda: mock_repo
+    return TestClient(app), mock_repo
+
+
+# ── GET /trades/critiques/{correlation_id} ────────────────────────────────────
+
+class TestListCritiques:
+
+    def test_list_critiques_returns_200_with_items_when_found(self):
+        critique = _make_critique()
+        client, _ = _make_pipeline_client(critiques=[critique])
+        r = client.get(f"/trades/critiques/{_VALID_PROPOSAL_UUID}")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["count"] == 1
+        assert len(data["items"]) == 1
+        assert data["items"][0]["stance"] == "AGREE"
+
+    def test_list_critiques_returns_200_empty_when_no_critiques(self):
+        client, _ = _make_pipeline_client(critiques=[])
+        r = client.get(f"/trades/critiques/{_VALID_PROPOSAL_UUID}")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["count"] == 0
+        assert data["items"] == []
+
+    def test_list_critiques_returns_404_on_malformed_uuid(self):
+        client, _ = _make_pipeline_client()
+        r = client.get("/trades/critiques/not-a-uuid")
+        assert r.status_code == 404
+
+    def test_list_critiques_count_matches_items_length(self):
+        critiques = [_make_critique(), _make_critique()]
+        client, _ = _make_pipeline_client(critiques=critiques)
+        data = client.get(f"/trades/critiques/{_VALID_PROPOSAL_UUID}").json()
+        assert data["count"] == len(data["items"])
+        assert data["count"] == 2
+
+
+# ── GET /trades/decisions/{correlation_id} ────────────────────────────────────
+
+class TestGetDecision:
+
+    def test_get_decision_returns_200_with_decision_when_found(self):
+        decision = _make_decision()
+        client, _ = _make_pipeline_client(decision=decision)
+        r = client.get(f"/trades/decisions/{_VALID_PROPOSAL_UUID}")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["outcome"] == "APPROVED"
+        assert data["consensus_state"]["consensus_type"] == "UNANIMOUS"
+
+    def test_get_decision_returns_404_when_no_decision(self):
+        client, _ = _make_pipeline_client(decision=None)
+        r = client.get(f"/trades/decisions/{_VALID_PROPOSAL_UUID}")
+        assert r.status_code == 404
+        assert r.json()["detail"] == "decision not found"
+
+    def test_get_decision_returns_404_on_malformed_uuid(self):
+        client, _ = _make_pipeline_client()
+        r = client.get("/trades/decisions/not-a-uuid")
+        assert r.status_code == 404
+        assert r.json()["detail"] == "decision not found"
+
+
+# ── GET /trades/pipeline/{correlation_id} ─────────────────────────────────────
+
+class TestGetPipeline:
+
+    def test_get_pipeline_returns_200_with_full_state_when_complete(self):
+        proposal_row = {**_PROPOSAL_DETAIL_ROW, "status": "atlas_validated"}
+        client, _ = _make_pipeline_client(
+            proposal_row=proposal_row,
+            critiques=[_make_critique()],
+            decision=_make_decision(),
+            atlas_validation=_make_atlas_validation(),
+        )
+        r = client.get(f"/trades/pipeline/{_VALID_PROPOSAL_UUID}")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["proposal"]["trade"]["ticker"] == "SPY"
+        assert len(data["critiques"]) == 1
+        assert data["decision"]["outcome"] == "APPROVED"
+        assert data["atlas_validation"]["approved"] is True
+
+    def test_get_pipeline_returns_404_when_proposal_not_found(self):
+        client, _ = _make_pipeline_client(proposal_row=None)
+        r = client.get(f"/trades/pipeline/{_VALID_PROPOSAL_UUID}")
+        assert r.status_code == 404
+        assert r.json()["detail"] == "proposal not found"
+
+    def test_get_pipeline_returns_404_on_malformed_uuid(self):
+        client, _ = _make_pipeline_client()
+        r = client.get("/trades/pipeline/not-a-uuid")
+        assert r.status_code == 404
+        assert r.json()["detail"] == "proposal not found"
+
+    def test_get_pipeline_returns_partial_state_when_chain_in_flight(self):
+        """Mid-pipeline: proposal exists, no critiques yet, no decision, no atlas."""
+        proposal_row = {**_PROPOSAL_DETAIL_ROW, "status": "pending"}
+        client, _ = _make_pipeline_client(
+            proposal_row=proposal_row,
+            critiques=[],
+            decision=None,
+            atlas_validation=None,
+        )
+        r = client.get(f"/trades/pipeline/{_VALID_PROPOSAL_UUID}")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "pending"
+        assert data["critiques"] == []
+        assert data["decision"] is None
+        assert data["atlas_validation"] is None
+
+    def test_get_pipeline_status_field_from_proposals_row(self):
+        """Status field comes directly from the proposals row's status column,
+        not inferred from the presence/absence of other pipeline messages."""
+        proposal_row = {**_PROPOSAL_DETAIL_ROW, "status": "under_critique"}
+        client, _ = _make_pipeline_client(
+            proposal_row=proposal_row,
+            critiques=[],
+            decision=None,
+            atlas_validation=None,
+        )
+        r = client.get(f"/trades/pipeline/{_VALID_PROPOSAL_UUID}")
+        data = r.json()
+        assert data["status"] == "under_critique"

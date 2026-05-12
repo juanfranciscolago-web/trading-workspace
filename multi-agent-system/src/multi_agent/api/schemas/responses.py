@@ -10,8 +10,16 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from multi_agent.communication.schemas import (
+    AtlasValidationMessage,
+    CritiqueMessage,
+    DecisionMessage,
+    ProposalMessage,
+)
 
 
 RiskModeOut = Literal["GREEN", "YELLOW", "RED", "BLACK"]
@@ -157,3 +165,43 @@ class AgentItem(BaseModel):
 
 class AgentsListResponse(BaseModel):
     items: list[AgentItem]
+
+
+# ── Trades / Critiques (Sprint 4 B.4.6) ────────────────────────────────────────
+
+class CritiquesListResponse(BaseModel):
+    """List of critiques for a single correlation_id, ordered chronologically.
+
+    Unlike ProposalsListResponse (which uses ProposalSummaryItem to flatten
+    the row for table display), this list returns full CritiqueMessage
+    instances because the detail page consuming it shows the full critique
+    (stance, evidence, concern, etc.) — there is no "summary" rendering."""
+    items: list[CritiqueMessage]
+    count: int
+
+
+# ── Trades / Pipeline aggregator (Sprint 4 B.4.6) ──────────────────────────────
+
+class PipelineStatusResponse(BaseModel):
+    """Aggregated pipeline state for a correlation_id. The frontend detail
+    page polls this endpoint at ~3s intervals while the chain runs async;
+    a single round-trip avoids 4 parallel requests per poll.
+
+    Field semantics during the async chain:
+    - proposal is always present (the endpoint returns 404 if the
+      correlation_id is unknown — there is no 'proposal not yet' state,
+      the trigger endpoint persists synchronously before returning).
+    - critiques may be empty in the brief window between
+      trigger-publish and ApolloConsumer-handle (typically < 1s, but the
+      list shape is future-proof for multiple critics in Sprint 5+).
+    - decision is None until ConsensusConsumer processes the critique(s).
+    - atlas_validation is None until AtlasConsumer processes the decision.
+    - status reflects trades.proposals.status: pending → under_critique
+      → decided → atlas_validated | rejected (the last two are terminal).
+    """
+    correlation_id: UUID
+    status: str
+    proposal: ProposalMessage
+    critiques: list[CritiqueMessage]
+    decision: DecisionMessage | None
+    atlas_validation: AtlasValidationMessage | None

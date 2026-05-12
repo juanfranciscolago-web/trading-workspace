@@ -483,3 +483,81 @@ class MessageRepository:
             row = cur.fetchone()
             cols = [d[0] for d in cur.description] if row else []
         return dict(zip(cols, row)) if row else None
+
+    def list_critiques_by_correlation_id(
+        self,
+        correlation_id,
+    ) -> list[CritiqueMessage]:
+        """
+        Return all critiques for a correlation_id as validated
+        CritiqueMessage instances, ordered chronologically (created_at ASC).
+
+        Sprint 4: typically 0 or 1 critique (only APOLLO is a real critic).
+        Future sprints: up to N as HERMES/NYX/VESTA come online. The list
+        shape is future-proof; the schema's UNIQUE(correlation_id,
+        critique_agent) constraint guarantees no duplicates from the same
+        critic, but does not bound N.
+
+        Unlike get_proposal_by_correlation_id (which returns a dict
+        because the list endpoint also needs the extracted columns), this
+        method returns the validated Pydantic model directly — the read
+        endpoints for critiques always want the full message. Design
+        divergence is deliberate (B.4.6 spec).
+        """
+        with self._pool.cursor() as cur:
+            cur.execute(
+                """
+                SELECT full_payload FROM trades.critiques
+                WHERE correlation_id = %s
+                ORDER BY created_at ASC
+                """,
+                (_coerce_uuid(correlation_id),),
+            )
+            rows = cur.fetchall()
+        return [CritiqueMessage.model_validate(row[0]) for row in rows]
+
+    def get_decision_by_correlation_id(
+        self,
+        correlation_id,
+    ) -> DecisionMessage | None:
+        """
+        Return the decision for a correlation_id as a validated
+        DecisionMessage, or None if no decision exists yet (chain
+        mid-flight) or the correlation_id is unknown.
+
+        Schema guarantees at most 1 decision per correlation_id (UNIQUE
+        constraint uq_decisions_correlation).
+        """
+        with self._pool.cursor() as cur:
+            cur.execute(
+                """
+                SELECT full_payload FROM trades.decisions
+                WHERE correlation_id = %s
+                """,
+                (_coerce_uuid(correlation_id),),
+            )
+            row = cur.fetchone()
+        return DecisionMessage.model_validate(row[0]) if row else None
+
+    def get_atlas_validation_by_correlation_id(
+        self,
+        correlation_id,
+    ) -> AtlasValidationMessage | None:
+        """
+        Return the ATLAS validation for a correlation_id as a validated
+        AtlasValidationMessage, or None if validation has not produced yet
+        or the correlation_id is unknown.
+
+        Schema guarantees at most 1 validation per correlation_id (UNIQUE
+        constraint uq_atlas_validations_correlation).
+        """
+        with self._pool.cursor() as cur:
+            cur.execute(
+                """
+                SELECT full_payload FROM trades.atlas_validations
+                WHERE correlation_id = %s
+                """,
+                (_coerce_uuid(correlation_id),),
+            )
+            row = cur.fetchone()
+        return AtlasValidationMessage.model_validate(row[0]) if row else None
