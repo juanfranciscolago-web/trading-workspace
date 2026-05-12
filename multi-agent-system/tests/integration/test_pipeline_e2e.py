@@ -26,11 +26,6 @@ skip-if-unavailable" is the lower-friction path. FakeRedis-based testing
 remains future work if real-Redis test latency becomes a problem.
 
 Caveats:
-- AtlasConsumer does NOT yet transition trades.proposals.status to
-  'atlas_validated' after validation (B.4.5a gap). Status stays at
-  'decided' (set by ConsensusConsumer). The test asserts the actual
-  current behavior; when AtlasConsumer adds the status transition,
-  this test must update accordingly.
 - If SnapshotBuilder fails on an empty positions table, the chain
   may stop at decision (no atlas_validation row). If this happens
   in practice, the test will time out at the atlas_validations wait
@@ -266,11 +261,10 @@ class TestPipelineE2E:
                 assert _count_table_rows("decisions", corr_id) == 1
                 assert _count_table_rows("atlas_validations", corr_id) == 1
 
-                # 4. Status reflects current real behavior: ConsensusConsumer
-                # set it to 'decided'. AtlasConsumer does NOT yet transition
-                # to 'atlas_validated' (B.4.5a gap, tech debt registered).
-                # When that gap is closed, update this assertion.
-                assert _query_status(corr_id) == "decided"
+                # 4. Status reflects the full chain completion: AtlasConsumer
+                # transitions proposals.status to 'atlas_validated' after
+                # validation (closed in S.5.5, was the B.4.5a gap).
+                assert _query_status(corr_id) == "atlas_validated"
         finally:
             if corr_id:
                 _cleanup_pipeline_rows(corr_id)

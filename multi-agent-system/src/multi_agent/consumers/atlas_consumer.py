@@ -154,6 +154,12 @@ class AtlasConsumer:
         # Persist atlas validation message
         self._repo.save_atlas_validation(atlas_msg)
 
+        # Advance proposal status (S.5.5: closes the B.4.5a gap where the
+        # chain stopped at 'decided'). approved=True → atlas_validated;
+        # approved=False → rejected.
+        new_status = 'atlas_validated' if atlas_msg.approved else 'rejected'
+        self._repo.update_proposal_status(corr, new_status)
+
         # Publish to bus
         self._bus.publish(AgentChannels.ATLAS_VALIDATION, atlas_msg)
 

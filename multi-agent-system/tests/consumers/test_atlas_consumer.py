@@ -45,6 +45,7 @@ class SpyRepo:
         self.atlas_validations: list = []
         self.atlas_snapshots: list = []
         self.rejected_dlqs: list = []
+        self.proposal_status_updates: list = []
 
     def save_atlas_validation(self, msg):
         self.atlas_validations.append(msg)
@@ -54,6 +55,11 @@ class SpyRepo:
 
     def save_rejected_dlq(self, **kwargs):
         self.rejected_dlqs.append(kwargs)
+
+    def update_proposal_status(self, correlation_id, status):
+        # S.5.5: AtlasConsumer transitions proposals.status to 'atlas_validated'
+        # or 'rejected' after validation. Record-to-list pattern for assertion.
+        self.proposal_status_updates.append((correlation_id, status))
 
     def get_proposal_by_correlation_id(self, correlation_id):
         # F1 fallback (Sprint 4 B.4.5a): AtlasConsumer falls back to DB
@@ -216,6 +222,13 @@ class TestHandleApproved:
         if msg.approved:
             assert len(self.repo.rejected_dlqs) == 0
 
+    def test_updates_status_to_atlas_validated(self):
+        """S.5.5: AtlasConsumer transitions proposals.status to
+        'atlas_validated' after approving a trade."""
+        assert len(self.repo.proposal_status_updates) == 1
+        _, status = self.repo.proposal_status_updates[0]
+        assert status == 'atlas_validated'
+
 
 # ── Tests: handle rejected message ───────────────────────────────────────────
 
@@ -240,6 +253,13 @@ class TestHandleRejected:
 
     def test_rejected_trade_writes_dlq_entry(self):
         assert len(self.repo.rejected_dlqs) == 1
+
+    def test_updates_status_to_rejected(self):
+        """S.5.5: AtlasConsumer transitions proposals.status to 'rejected'
+        when atlas_validate returns approved=False (kill switch path)."""
+        assert len(self.repo.proposal_status_updates) == 1
+        _, status = self.repo.proposal_status_updates[0]
+        assert status == 'rejected'
 
 
 # ── Tests: guard conditions ───────────────────────────────────────────────────
