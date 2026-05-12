@@ -4,7 +4,12 @@ import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { useProposal, type ProposalDetail } from '@/hooks/use-proposals'
+import { SectionTitle } from '@/components/ui/section-title'
+import { AtlasValidationSection } from '@/components/widgets/atlas-validation-section'
+import { CritiqueSection } from '@/components/widgets/critique-section'
+import { DecisionSection } from '@/components/widgets/decision-section'
+import { StatusBadge } from '@/components/widgets/status-badge'
+import { usePipeline, type PipelineStatus } from '@/hooks/use-pipeline'
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -48,9 +53,7 @@ interface SectionProps {
 function Section({ title, children }: SectionProps) {
   return (
     <div>
-      <h3 className="text-xs font-semibold tracking-widest text-white/40 uppercase mb-2">
-        {title}
-      </h3>
+      <SectionTitle>{title}</SectionTitle>
       <div className="space-y-1 text-sm">{children}</div>
     </div>
   )
@@ -96,7 +99,7 @@ interface ProposalDetailWidgetProps {
 }
 
 export function ProposalDetailWidget({ corrId }: ProposalDetailWidgetProps) {
-  const { data, isLoading, isError, error } = useProposal(corrId)
+  const { data, isLoading, isError, error } = usePipeline(corrId)
 
   if (!corrId) {
     return (
@@ -118,7 +121,7 @@ export function ProposalDetailWidget({ corrId }: ProposalDetailWidgetProps) {
 
   if (isError) {
     const msg = error instanceof Error ? error.message : 'unknown error'
-    // Backend returns detail="proposal not found" on 404 (per routes/trades.py).
+    // Backend get_pipeline returns detail="proposal not found" on 404 (per routes/trades.py).
     // Fallback to substring match if a future error path uses different wording.
     const is404 = msg === 'proposal not found' || msg.toLowerCase().includes('not found')
     return (
@@ -137,12 +140,13 @@ export function ProposalDetailWidget({ corrId }: ProposalDetailWidgetProps) {
 
   if (!data) return null
 
-  return <ProposalDetailContent proposal={data} />
+  return <ProposalDetailContent pipeline={data} />
 }
 
 // ── Content (rendered when data is loaded) ────────────────────────────────────
 
-function ProposalDetailContent({ proposal }: { proposal: ProposalDetail }) {
+function ProposalDetailContent({ pipeline }: { pipeline: PipelineStatus }) {
+  const proposal = pipeline.proposal
   const structure = proposal.trade.structure
   const thesis = proposal.thesis
   const sizing = proposal.sizing
@@ -159,6 +163,8 @@ function ProposalDetailContent({ proposal }: { proposal: ProposalDetail }) {
           <span className={convictionToneClass(proposal.conviction_score)}>
             Conviction {proposal.conviction_score}
           </span>
+          <span className="text-white/30 mx-2">·</span>
+          <StatusBadge status={pipeline.status} />
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -218,6 +224,11 @@ function ProposalDetailContent({ proposal }: { proposal: ProposalDetail }) {
           <Field label="Schema version" value={proposal.schema_version} />
           <Field label="Created" value={formatTimestamp(proposal.timestamp)} />
         </Section>
+
+        {/* Sprint 4 B.4.6 — debate chain sections, polled live via usePipeline. */}
+        <CritiqueSection critiques={pipeline.critiques} />
+        <DecisionSection decision={pipeline.decision} />
+        <AtlasValidationSection validation={pipeline.atlas_validation} />
 
       </CardContent>
     </Card>
