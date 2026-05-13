@@ -1,7 +1,7 @@
 # ADR-004: Sprint 5 Plan — Schwab Integration (Read-Only Data Layer)
 
 **Fecha:** 2026-05-13
-**Estado:** Propuesto
+**Estado:** Aceptado (S.5.6g, 2026-05-14)
 **Contexto:** Sprint 4 cerrado (commit `f1d27ae`). Próximo bloque per ADR-003 §5 ("Schwab integration — Sprint 5").
 
 ---
@@ -35,6 +35,10 @@ Per CLAUDE.md regla #2:
 - **`shared_core/brokers/schwab_client.py` existe pero es SKELETON.** 267 LOC con estructura completa pero **todos los métodos relevantes raise `NotImplementedError("Port from Eolo: ...")`**: `_refresh_access_token`, `get_quote`, `get_quotes`, `get_options_chain`, `get_price_history`, `get_positions`, `get_balances`, `place_order`, etc. Auth via `from_env()` lee `SCHWAB_API_KEY/SECRET/REFRESH_TOKEN`, pero implementation real está TODO.
 
 - **Eolo NO tiene un `SchwabClient` unificado.** Las llamadas a Schwab están dispersas en `eolo/marketdata.py`, `eolo/Bot/marketdata.py`, `eolo/Bot-v1.2/buffer_market_data.py`, `eolo/eolo_common/multi_tf/market_data.py`, `eolo/eolo-options/buffer_market_data.py`. 5 implementaciones independientes de `get_price_history` con variations.
+
+  > **AMENDMENT (S.5.6c, 2026-05-14):** El conteo "5 implementaciones" era impreciso. Rule #15 finding: real inventory es **2 REST canónicos + 4 adapters/wrappers**. REST: `eolo/Bot/marketdata.py` (uso primario en S.5.6c) + `eolo/marketdata.py` (root). Adapters: `Bot-v1.2/buffer_market_data.py`, `eolo_common/multi_tf/market_data.py`, `eolo-options/buffer_market_data.py`, `eolo-crop/buffer_market_data.py` (4to no listado original).
+  >
+  > **AMENDMENT (S.5.6d, 2026-05-14):** Para options chain, Eolo SÍ tiene REST: `eolo-options/stream/options_chain.py::OptionChainFetcher._fetch_chain` (idéntico a `eolo-crop/stream/options_chain.py` clone). La asunción inicial "Eolo NO tiene get_options_chain named function" era literalmente correcta pero semánticamente engañosa — `_fetch_chain` cumple el rol.
 
 - **Auth en Eolo usa GCP Secret Manager + Firestore.** `eolo/init_auth.py` invoca `retrieve_google_secret_dict(gcp_id="eolo-schwab-agent", secret_id="cs-app-key")` para api_key/secret + `retrieve_firestore_value/store_firestore_value` para refresh_token. Manual one-time OAuth dance vía `safe_init_auth_v2.py` (URL passed por argv).
 
@@ -104,7 +108,9 @@ Per CLAUDE.md regla #2:
 **Decisión:** Identificar cleanest Eolo source per método, copiar verbatim, adaptar a SchwabClient signature.
 
 - `get_price_history`: source candidate `eolo_common/multi_tf/market_data.py` (verificar en S.5.6c).
+  > **AMENDMENT (S.5.6c, 2026-05-14):** Rule #15 finding revealed `eolo_common/multi_tf/market_data.py` is a buffer-based adapter (delegates to `rest_fallback`), NOT a REST implementation. Real canonical REST source ported: `eolo/Bot/marketdata.py` (intraday minute + daily via `period_type="month"`/`frequency_type="daily"` pattern).
 - `get_options_chain`: no existe en Eolo con ese nombre — buscar fetcher inline o implementar from Schwab API docs (sub-block S.5.6d evaluará).
+  > **AMENDMENT (S.5.6d, 2026-05-14):** Eolo SÍ tiene REST implementation: `eolo-options/stream/options_chain.py::OptionChainFetcher._fetch_chain` (+ identical clone at `eolo-crop/stream/options_chain.py`). El method name diff (`_fetch_chain` vs `get_options_chain`) made the initial literal search miss it. 3 reusable methods ported: `_fetch_chain`, `_normalize`, `_parse_option_map`.
 - `_refresh_access_token`: source candidate `eolo/safe_init_auth_v2.py` (OAuth dance + Firestore write).
 
 Si port revela bugs en Eolo source, fix en shared_core (no en Eolo) — Eolo intocable per CLAUDE.md regla #5.
@@ -221,8 +227,72 @@ Si port revela bugs en Eolo source, fix en shared_core (no en Eolo) — Eolo int
 - CLAUDE.md regla #5 — Eolo intocable durante refactors.
 - CLAUDE.md regla #15 — Verificar realidad antes de spec (aplicado heavy durante recolección S.5.6a).
 - Eolo `init_auth.py` + `safe_init_auth_v2.py` — auth dance reference.
-- Eolo `eolo_common/multi_tf/market_data.py` — `get_price_history` reference (TBD verify S.5.6c).
+- Eolo `Bot/marketdata.py` — `get_price_history` canonical REST source (ported S.5.6c).
+- Eolo `eolo-options/stream/options_chain.py` — `OptionChainFetcher._fetch_chain` canonical REST for options chain (ported S.5.6d).
+- `docs/operator/schwab-setup.md` — operator handoff guide (Sprint 5 S.5.6g).
 
 ---
 
-> **Próximo sub-bloque:** S.5.6b (Port GCP auth helpers + OAuth refresh). Inicia tras Juan sign-off de este ADR.
+## 9. Close-out (S.5.6g, 2026-05-14)
+
+**Status: Aceptado.** Sprint 5 cerrado en 4 días (commits 11-14 mayo).
+Foundation completa para integración Schwab read-only via `SchwabDataLayer`
+toggle por `USE_SCHWAB_DATA_LAYER` flag.
+
+### 9.1 Sub-blocks delivered
+
+| Sub-block | Commit | LOC | Tests delta | Description |
+|---|---|---|---|---|
+| S.5.5 | `f1d27ae` | small | — | AtlasConsumer status transition fix (Sprint 4 close-out gap) |
+| S.5.6a | `bc18737` | 228 (doc) | — | ADR-004 Sprint 5 plan firmado |
+| S.5.6b | `01b55c6` | +727 -9 | +33 | GCP auth helpers + Schwab OAuth refresh |
+| S.5.6c | `0732baf` | +355 -6 | +13 | Port `get_price_history` from Eolo Bot/marketdata.py |
+| S.5.6d | `c258005` | +597 -10 | +20 | Port `get_options_chain` + normalized chain shape |
+| S.5.6e | `6ab8327` | +675 -4 | +22 | `SchwabDataLayer(DataLayer)` impl + correlations + skew 25-delta |
+| S.5.6f | `c325b5e` | +572 -4 | +15 (+1 skipped gated) | Lifespan integration + `USE_SCHWAB_DATA_LAYER` flag + ATHENA caveat |
+| S.5.6g | (this commit) | ~+450 (doc) | 0 | Operator handoff doc + ADR-004 amendments + close-out |
+| **Total** | — | **~+3,600 net LOC** | **+103 passing, +1 skipped** | — |
+
+Tests state final: **868 passing** (shared_core 95 + multi-agent 773) + 1 integration test skipped by design.
+
+### 9.2 Rule #15 findings summary
+
+Rule #15 ("verify reality before spec") fired ~30+ times across Sprint 5
+sub-blocks. Distribution by sub-block:
+
+- **S.5.6a (4)**: SchwabClient skeleton existing, Eolo battle-tested patterns inventory, dispersions count initial estimate.
+- **S.5.6b (5)**: GCP project setup, Secret Manager structure, Firestore collection naming, `TOKEN_SCHWAB` dead placeholder, `gcloud firestore documents` does NOT exist.
+- **S.5.6c (8)**: 2 REST + 4 adapters (not 5), `eolo_common/multi_tf` is adapter NOT REST, endpoint shape `/marketdata/v1/pricehistory` (not `/v1/{ticker}/quotes`), `httpx` already in shared_core (D-α revisited), `Bot/marketdata.py` is canonical source.
+- **S.5.6d (8)**: Eolo SÍ has `_fetch_chain`, `eolo-options/stream/options_chain.py` and `eolo-crop/stream/options_chain.py` are identical clones, strike key is string (not float, Schwab native format), schema requires `_normalize_options_chain` + `_parse_option_exp_map`.
+- **S.5.6e (7)**: DataLayer interface is single-method `snapshot()`, MarketState shape, TickerSnapshot 8 fields, SkewSnapshot 3 fields legacy "1σ" docstring, `ohlcv_hourly` mention in prompt is decorative not load-bearing, TICKER_UNIVERSE 6 tickers exact, lifespan injection point.
+- **S.5.6f (5)**: Settings class extension pattern, lifespan branch exact line, `SchwabClient.from_env()` vestigial post-S.5.6b, ATHENA prompt single-`#` heading style, Firestore token race vs Eolo mechanism.
+- **S.5.6g (3)**: `docs/operator/` directory did NOT exist (new convention), `gcloud firestore documents` invalid (Python helper alternative), `create_app()` factory function vs `app` instance.
+
+**Pattern**: each rule #15 firing saved 10-30 min of speculative implementation that would have required rework. Recommend continuing the pattern in Sprint 6+.
+
+### 9.3 Tech debt registered for Sprint 6+
+
+Mirror of `docs/operator/schwab-setup.md` §7 — single source of truth:
+
+1. **`iv_history` table + iv_rank real percentile** → ADR-005 separate. Sprint 5 placeholder 50.0.
+2. **`_persisted_at` field in Firestore writes** → cleaner token expiry tracking. Currently `token_expires_at=None` initial in `from_gcp()`.
+3. **Hourly OHLCV resample** (HERMES Sprint 6+) → currently `ohlcv_hourly=[]` in `SchwabDataLayer`.
+4. **Date-aware correlations alignment** → required if Sprint 6+ adds VIX or cross-exchange tickers.
+5. **`SchwabClient.from_env()` removal** → confirmed zero callers in S.5.6g recolección. Caller audit + separate ADR.
+6. **ATHENA prompt caveat block removal** → when `iv_history` lands Sprint 6+.
+7. **Token caching with TTL check** → enable concurrent operation with Eolo without race condition.
+8. **`TOKEN_SCHWAB` Secret Manager cleanup** → placeholder dead value `"TU_TOKEN_AQUI"`, unused since S.5.6b discovery.
+9. **`SkewSnapshot` field naming** → inline comments resolved S.5.6g; field NAMES (`put_skew_iv`/`call_skew_iv`) inherited from synthetic stub. Rename to `put_25d_iv`/`call_25d_iv` consideration Sprint 6+ (breaking change for serialized state).
+
+### 9.4 Next steps Sprint 6+
+
+- **ADR-005** decision: `iv_history` table architecture (column shapes, retention policy, nightly snapshot job).
+- **HERMES agent** (tactical, hourly): defer until intraday data layer ready (hourly resample tech debt #3).
+- **NYX agent** (per ADR-003 §5 explicit): re-evaluate after Sprint 6+ data layer growth provides sentiment inputs.
+- **LlmGateway refactor (S.5.4 deferred per ADR-003 retrospective)**: re-evaluate post-NYX/HERMES landing if compounding workaround pain emerges.
+
+Sprint 5 closes the "foundation" stage. Sprint 6+ delivers feature growth (real agents trading with real data + iv_history backfill + intraday).
+
+---
+
+> **Sprint 5 cerrado** (commits 11-14 mayo). Próximo: ADR-005 (`iv_history` table architecture) + Sprint 6+ planning.

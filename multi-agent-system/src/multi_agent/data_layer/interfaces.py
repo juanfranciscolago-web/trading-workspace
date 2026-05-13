@@ -33,10 +33,26 @@ class OHLCV:
 
 @dataclass(frozen=True)
 class SkewSnapshot:
-    """Volatility skew at three strike points around the current price."""
-    atm_iv: float           # IV at-the-money
-    put_skew_iv: float      # IV at strike ATM - 1σ
-    call_skew_iv: float     # IV at strike ATM + 1σ
+    """Volatility skew at three strike points around the current price.
+
+    The semantic of each "skew strike" depends on the active DataLayer:
+
+    - SchwabDataLayer (Sprint 5+, ADR-004 D5): put_skew_iv and
+      call_skew_iv are observed at contracts with delta closest to
+      ±0.25 (industry-standard 25-delta skew). atm_iv is observed at
+      the strike closest to spot.
+
+    - StubDataLayer (synthetic): atm_iv, put_skew_iv, call_skew_iv
+      are generated via put-bias multipliers approximating
+      25-delta-like values — not actual delta lookups.
+
+    Legacy: earlier inline comments referenced "ATM ± 1σ" moves; that
+    reflected a prior synthetic model. The current canonical semantic
+    is 25-delta (real) or 25-delta-approximation (stub).
+    """
+    atm_iv: float           # IV at-the-money (closest strike to spot)
+    put_skew_iv: float      # IV at ~25-delta put strike (ADR-004 D5)
+    call_skew_iv: float     # IV at ~25-delta call strike (ADR-004 D5)
 
 
 @dataclass(frozen=True)
