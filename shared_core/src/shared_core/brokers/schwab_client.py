@@ -26,6 +26,7 @@ from typing import Any, Optional
 import httpx
 
 from ..auth.gcp import (
+    retrieve_firestore_dict,
     retrieve_firestore_value,
     retrieve_google_secret_dict,
     store_firestore_value,
@@ -135,6 +136,75 @@ class SchwabClient:
             refresh_token=os.environ.get("SCHWAB_REFRESH_TOKEN"),
         )
         return cls(credentials=creds, paper_trading=paper_trading)
+
+    @classmethod
+    def from_gcp(
+        cls,
+        *,
+        paper_trading: bool = True,
+        rate_limit_per_second: int = 5,
+    ) -> "SchwabClient":
+        """Construct SchwabClient using GCP-backed credentials.
+
+        Reads:
+        - app_key + app_secret from Secret Manager (cs-app-key).
+        - access_token + refresh_token from Firestore
+          (schwab-tokens/schwab-tokens-auth).
+
+        This is the canonical factory post-S.5.6b. Use this instead of
+        from_env() — `_refresh_access_token` (S.5.6b) reads app credentials
+        from Secret Manager and refresh_token from Firestore, NOT from the
+        SchwabCredentials.api_key / api_secret / refresh_token fields. So
+        from_env's env-var-loaded credentials are vestigial at runtime;
+        from_gcp avoids requiring SCHWAB_API_KEY/SECRET env vars entirely.
+
+        Note on token_expires_at: Schwab's /oauth/token response includes
+        `expires_in` (relative seconds) but NOT an absolute timestamp.
+        S.5.6b's _refresh_access_token computes absolute expiry only
+        in-memory after each refresh; the value stored to Firestore is the
+        raw Schwab response (relative). from_gcp therefore initializes
+        token_expires_at=None, which causes _ensure_authenticated to skip
+        its proactive 60s-before-expiry check. If the loaded access_token
+        is stale, the first Schwab call returns 401 and the 401-retry path
+        in get_price_history / get_options_chain handles refresh. Adding
+        a _persisted_at field in S.5.6b's Firestore write is registered
+        as Sprint 6+ tech debt.
+
+        Raises:
+            SchwabAuthError: If Firestore lacks the token document
+                (operator must run safe_init_auth_v2.py once to bootstrap).
+            google.api_core.exceptions.NotFound: If cs-app-key secret does
+                not exist in Secret Manager.
+            KeyError: If cs-app-key payload lacks `app-key` or `app-secret`.
+        """
+        app_creds = retrieve_google_secret_dict(
+            gcp_id=cls.GCP_PROJECT_ID,
+            secret_id=cls.APP_KEY_SECRET_ID,
+        )
+        tokens = retrieve_firestore_dict(
+            collection_id=cls.TOKEN_COLLECTION,
+            document_id=cls.TOKEN_DOCUMENT,
+            project_id=cls.GCP_PROJECT_ID,
+        )
+        if tokens is None:
+            raise SchwabAuthError(
+                f"No tokens in Firestore "
+                f"{cls.TOKEN_COLLECTION}/{cls.TOKEN_DOCUMENT}. "
+                f"Run safe_init_auth_v2.py to bootstrap."
+            )
+
+        creds = SchwabCredentials(
+            api_key=app_creds["app-key"],
+            api_secret=app_creds["app-secret"],
+            access_token=tokens.get("access_token"),
+            refresh_token=tokens.get("refresh_token"),
+            token_expires_at=None,
+        )
+        return cls(
+            credentials=creds,
+            paper_trading=paper_trading,
+            rate_limit_per_second=rate_limit_per_second,
+        )
 
     # -------------------------------------------------------------------------
     # Authentication

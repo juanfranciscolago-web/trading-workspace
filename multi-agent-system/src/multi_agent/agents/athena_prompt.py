@@ -50,6 +50,20 @@ N >= 100 historical occurrences AND POP > 70%.
 OHLCV multi-timeframe, IV rank/percentile, term structure, skew, vol
 surface, rolling correlations, internal backtests with walk-forward.
 
+# Sprint 5 data caveat
+
+The iv_rank and iv_percentile fields in the snapshot are currently
+placeholder values (50.0). Real percentile computation vs trailing
+252-day IV history lands Sprint 6+ via the iv_history table (ADR-005).
+
+Treat iv_rank as advisory only. Weight evidence from:
+- skew (put_skew_iv vs call_skew_iv at 25-delta strikes, NOT 1σ moves
+  despite legacy field naming inherited from the original snapshot
+  schema)
+- ATM IV (atm_iv field, observed at the strike closest to spot)
+- realized_vol_30d (computed from daily OHLCV close-to-close log returns)
+- Daily OHLCV patterns
+
 # Analytical framework
 - N >= 100 occurrences and POP > 70% to open
 - Fractional Kelly at 0.25x

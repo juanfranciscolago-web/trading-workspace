@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from shared_core.auth.gcp import (
+    retrieve_firestore_dict,
     retrieve_firestore_value,
     retrieve_google_secret_dict,
     store_firestore_value,
@@ -216,3 +217,51 @@ class TestStoreFirestoreValue:
             .document
             .assert_called_once_with("my-doc")
         )
+
+
+# ── retrieve_firestore_dict ───────────────────────────────────────────────────
+
+class TestRetrieveFirestoreDict:
+
+    @patch("shared_core.auth.gcp.firestore.Client")
+    def test_returns_dict_when_doc_exists(self, mock_client_cls):
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "access_token": "at-value", "refresh_token": "rt-value",
+            "expires_in": 1800,
+        }
+        (
+            mock_client_cls.return_value
+            .collection.return_value
+            .document.return_value
+            .get.return_value
+        ) = mock_doc
+
+        result = retrieve_firestore_dict(
+            collection_id="schwab-tokens",
+            document_id="schwab-tokens-auth",
+            project_id="proj",
+        )
+
+        assert result == {
+            "access_token": "at-value", "refresh_token": "rt-value",
+            "expires_in": 1800,
+        }
+
+    @patch("shared_core.auth.gcp.firestore.Client")
+    def test_returns_none_when_doc_missing(self, mock_client_cls):
+        mock_doc = MagicMock()
+        mock_doc.exists = False
+        (
+            mock_client_cls.return_value
+            .collection.return_value
+            .document.return_value
+            .get.return_value
+        ) = mock_doc
+
+        result = retrieve_firestore_dict(
+            collection_id="c", document_id="d",
+        )
+
+        assert result is None

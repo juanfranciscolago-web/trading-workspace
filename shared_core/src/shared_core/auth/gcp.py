@@ -95,6 +95,48 @@ def retrieve_firestore_value(
         return None
 
 
+def retrieve_firestore_dict(
+    collection_id: str,
+    document_id: str,
+    project_id: str | None = None,
+) -> dict | None:
+    """Read the full Firestore document as a dict.
+
+    Returns None if the document does not exist or the read fails —
+    matches retrieve_firestore_value's defensive behavior for callers
+    that treat None as "not yet initialized".
+
+    Used when the caller needs multiple fields at once (e.g.
+    SchwabClient.from_gcp reads access_token + refresh_token from the
+    same token doc).
+
+    Args:
+        collection_id: Firestore collection.
+        document_id: Document id within the collection.
+        project_id: Optional GCP project. None uses ADC quota_project
+            default (matches retrieve_firestore_value's pattern).
+
+    Returns:
+        Full document as dict, or None on miss or read error.
+    """
+    db = firestore.Client(project=project_id) if project_id else firestore.Client()
+    try:
+        doc = db.collection(collection_id).document(document_id).get()
+        if doc.exists:
+            return doc.to_dict()
+        logger.warning(
+            "Firestore document %s/%s does not exist",
+            collection_id, document_id,
+        )
+        return None
+    except Exception:
+        logger.exception(
+            "Failed to retrieve Firestore document %s/%s",
+            collection_id, document_id,
+        )
+        return None
+
+
 def store_firestore_value(
     project_id: str,
     collection_id: str,

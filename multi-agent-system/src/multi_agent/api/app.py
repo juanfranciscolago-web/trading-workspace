@@ -19,9 +19,64 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from multi_agent.config import settings
+from multi_agent.config import Settings, settings
+from multi_agent.data_layer.interfaces import DataLayer
 
 logger = logging.getLogger(__name__)
+
+
+def _select_data_layer(settings_obj: Settings) -> DataLayer:
+    """Construct the DataLayer per USE_SCHWAB_DATA_LAYER flag.
+
+    Fail-fast contract (D-mmm): if USE_SCHWAB_DATA_LAYER=True but
+    SchwabDataLayer construction fails (GCP creds missing, Firestore tokens
+    not bootstrapped, etc.), the function re-raises after logging — the app
+    refuses to start. NO silent fallback to StubDataLayer (would mislead
+    the operator into believing real data was active).
+
+    Args:
+        settings_obj: Settings instance (passed explicitly for testability
+            instead of reading the module-level `settings`).
+
+    Returns:
+        SchwabDataLayer if flag enabled and construction succeeds; otherwise
+        StubDataLayer.
+
+    Raises:
+        Exception: When USE_SCHWAB_DATA_LAYER=True but SchwabClient.from_gcp()
+            or SchwabDataLayer() construction fails. Operator must either
+            (a) set USE_SCHWAB_DATA_LAYER=False to fall back to StubDataLayer,
+            or (b) fix the underlying GCP / Firestore configuration before
+            restarting.
+    """
+    if settings_obj.USE_SCHWAB_DATA_LAYER:
+        from multi_agent.data_layer import SchwabDataLayer
+        from shared_core.brokers.schwab_client import SchwabClient
+
+        try:
+            schwab_client = SchwabClient.from_gcp()
+            data_layer = SchwabDataLayer(schwab_client)
+            logger.info(
+                "✓ SchwabDataLayer active (real broker data, "
+                "iv_rank=50.0 placeholder per ADR-004 D3)"
+            )
+            return data_layer
+        except Exception:
+            logger.exception(
+                "USE_SCHWAB_DATA_LAYER=True but SchwabDataLayer construction "
+                "failed. Refusing to start. Set USE_SCHWAB_DATA_LAYER=False "
+                "to fall back to StubDataLayer, or fix the underlying GCP / "
+                "Firestore configuration."
+            )
+            raise
+    else:
+        from multi_agent.data_layer import StubDataLayer
+
+        data_layer = StubDataLayer()
+        logger.info(
+            "✓ StubDataLayer active (synthetic data, default for Sprint 5)"
+        )
+        return data_layer
 
 
 @asynccontextmanager
@@ -34,7 +89,6 @@ async def _lifespan(app: FastAPI):
     from multi_agent.risk.portfolio_snapshot import CachedSnapshotBuilder, SnapshotBuilder
     from multi_agent.observability.llm_cost_repository import LLMCostRepository
     from multi_agent.persistence.system_repository import SystemRepository
-    from multi_agent.data_layer import StubDataLayer
     from multi_agent.alerts.bus import AlertBus
     from multi_agent.alerts.dedup import AlertDedup
     from multi_agent.alerts.repository import AlertRepository
@@ -87,10 +141,11 @@ async def _lifespan(app: FastAPI):
     )
     router_config_path = os.environ.get("CLAUDE_ROUTER_CONFIG", str(default_router_config))
     app.state.claude_router = ClaudeRouter.from_config(router_config_path)
-    app.state.data_layer = StubDataLayer()
+    app.state.data_layer = _select_data_layer(settings)
     logger.info(
-        "✓ ATHENA dependencies ready: claude_router (config=%s), data_layer=StubDataLayer",
+        "✓ ATHENA dependencies ready: claude_router (config=%s), data_layer=%s",
         router_config_path,
+        type(app.state.data_layer).__name__,
     )
 
     # Agent message bus (Sprint 4 B.4.4) — Redis-backed pub/sub for the

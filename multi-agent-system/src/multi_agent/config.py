@@ -78,6 +78,17 @@ class Settings(BaseSettings):
     TRADING_MODE: TradingMode = TradingMode.PAPER
     TRADING_MODE_CONFIRM: str | None = None
 
+    # ── Schwab integration (Sprint 5+) ────────────────────────────────────────
+    # USE_SCHWAB_DATA_LAYER toggles the data source consumed by ATHENA and other
+    # real agents:
+    #   False (default) → StubDataLayer (synthetic seeded OHLCV/IV/skew).
+    #   True            → SchwabDataLayer via SchwabClient.from_gcp() (real
+    #                     Schwab broker data). Requires GCP credentials (ADC
+    #                     locally, GOOGLE_APPLICATION_CREDENTIALS in CI/prod)
+    #                     and the schwab-tokens Firestore doc bootstrapped via
+    #                     safe_init_auth_v2.py.
+    USE_SCHWAB_DATA_LAYER: bool = False
+
     # ── HIGH priority: fail-fast at startup (raise = process cannot start) ───
 
     @field_validator("DATABASE_URL")
