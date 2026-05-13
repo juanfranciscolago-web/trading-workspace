@@ -38,6 +38,10 @@ class SchwabAuthError(RuntimeError):
     """Raised when Schwab OAuth refresh fails non-recoverably."""
 
 
+class SchwabAPIError(RuntimeError):
+    """Raised when Schwab Market Data API returns a non-recoverable error."""
+
+
 @dataclass
 class SchwabCredentials:
     """Credentials for Schwab API authentication."""
@@ -95,6 +99,7 @@ class SchwabClient:
     TOKEN_COLLECTION = "schwab-tokens"
     TOKEN_DOCUMENT = "schwab-tokens-auth"
     OAUTH_TOKEN_URL = "https://api.schwabapi.com/v1/oauth/token"
+    PRICE_HISTORY_URL = "https://api.schwabapi.com/marketdata/v1/pricehistory"
     DEFAULT_TOKEN_TTL_SECONDS = 1800  # Schwab default ~30min if expires_in missing
 
     def __init__(
@@ -291,17 +296,111 @@ class SchwabClient:
     def get_price_history(
         self,
         symbol: str,
-        period_type: str = "day",
-        period: int = 30,
-        frequency_type: str = "minute",
+        period_type: str = "month",
+        period: int = 1,
+        frequency_type: str = "daily",
         frequency: int = 1,
     ) -> list[dict]:
-        """Get OHLCV history."""
+        """Fetch OHLCV candles for a symbol via Schwab Market Data API.
+
+        Pattern ported from Eolo's Bot/marketdata.py (_get_daily_history +
+        _fetch_minute_candles). Returns raw candle dicts (no DataFrame
+        conversion); SchwabDataLayer (S.5.6e) is responsible for pandas wrapping
+        when needed.
+
+        Args:
+            symbol: Ticker (e.g. "SPY", "AAPL").
+            period_type: "day" | "month" | "year" | "ytd".
+            period: How many `period_type` units to fetch.
+            frequency_type: "minute" | "daily" | "weekly" | "monthly".
+            frequency: Granularity. Valid combinations per Schwab:
+                       minute  → 1, 5, 10, 15, 30
+                       daily/weekly/monthly → 1
+            Defaults yield ~22 daily candles (1 month) — sane default for
+            ATHENA Sprint 5 use. Intraday callers must pass explicit kwargs.
+
+        Returns:
+            List of candle dicts. Each candle has keys:
+                datetime  (int, epoch milliseconds — raw Schwab format)
+                open      (float)
+                high      (float)
+                low       (float)
+                close     (float)
+                volume    (int)
+            Returns [] if Schwab returns no candles (off-hours / unsupported
+            symbol / etc. — normal, not an error).
+
+        Raises:
+            SchwabAPIError: If Schwab returns non-200 (after one 401 retry), or
+                if the response cannot be parsed. Network errors propagate
+                natively (httpx.RequestError).
+            SchwabAuthError: If the 401 retry's _refresh_access_token also fails.
+
+        Notes:
+            - Schwab caps intraday: `period_type="day"` accepts period 1-10.
+              Invalid combos → SchwabAPIError from Schwab's 400.
+            - No tail trimming. Caller takes the slice they need.
+            - 401 retry: max 1 attempt with explicit _refresh_access_token in
+              between (Schwab's token may have just expired despite our 60s
+              expiry buffer).
+        """
         self._ensure_authenticated()
         self.rate_limiter.wait_if_needed()
 
-        # TODO: Port from Eolo
-        raise NotImplementedError("Port from Eolo: get_price_history")
+        params = {
+            "symbol": symbol,
+            "periodType": period_type,
+            "period": period,
+            "frequencyType": frequency_type,
+            "frequency": frequency,
+            "needExtendedHoursData": False,
+        }
+        headers = {"Authorization": f"Bearer {self.credentials.access_token}"}
+
+        for attempt in range(2):
+            response = httpx.get(
+                self.PRICE_HISTORY_URL,
+                headers=headers,
+                params=params,
+                timeout=10,
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                candles = data.get("candles", [])
+                if not candles:
+                    logger.debug(
+                        "Schwab pricehistory returned no candles for %s "
+                        "(%s/%d %s/%d)",
+                        symbol, period_type, period, frequency_type, frequency,
+                    )
+                    return []
+                logger.debug(
+                    "Fetched %d candles for %s (%s/%d %s/%d)",
+                    len(candles), symbol, period_type, period,
+                    frequency_type, frequency,
+                )
+                return candles
+
+            if response.status_code == 401 and attempt == 0:
+                logger.warning(
+                    "Schwab pricehistory 401 for %s — refreshing token and retrying",
+                    symbol,
+                )
+                self._refresh_access_token()
+                headers = {"Authorization": f"Bearer {self.credentials.access_token}"}
+                continue
+
+            # Non-200 (or 401 on second attempt) — not retryable.
+            raise SchwabAPIError(
+                f"Schwab /pricehistory returned {response.status_code} "
+                f"for {symbol}: {response.text[:200]}"
+            )
+
+        # Unreachable: loop always exits via return or raise.
+        raise SchwabAPIError(
+            f"Schwab /pricehistory: unexpected control flow for {symbol}"
+        )
 
     # -------------------------------------------------------------------------
     # Account state
