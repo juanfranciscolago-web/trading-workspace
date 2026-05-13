@@ -100,6 +100,11 @@ class SchwabClient:
     TOKEN_DOCUMENT = "schwab-tokens-auth"
     OAUTH_TOKEN_URL = "https://api.schwabapi.com/v1/oauth/token"
     PRICE_HISTORY_URL = "https://api.schwabapi.com/marketdata/v1/pricehistory"
+    CHAINS_URL = "https://api.schwabapi.com/marketdata/v1/chains"
+    DEFAULT_STRIKE_COUNT = 20
+    DEFAULT_OPTIONS_CONTRACT_TYPE = "ALL"
+    DEFAULT_OPTIONS_STRATEGY = "SINGLE"
+    DEFAULT_OPTIONS_RANGE = "ALL"
     DEFAULT_TOKEN_TTL_SECONDS = 1800  # Schwab default ~30min if expires_in missing
 
     def __init__(
@@ -273,25 +278,223 @@ class SchwabClient:
         self,
         underlying: str,
         expiration: Optional[str] = None,
-        strike_count: int = 20,
+        strike_count: int = DEFAULT_STRIKE_COUNT,
     ) -> dict:
-        """
-        Get options chain for an underlying.
+        """Fetch options chain for an underlying via Schwab Market Data API.
+
+        Pattern ported from Eolo's eolo-options/stream/options_chain.py
+        (_fetch_chain + _normalize + _parse_option_map). Returns a normalized
+        chain dict — Schwab's raw response uses an awkward nested map keyed
+        by "YYYY-MM-DD:DTE" with single-element contract lists, which we
+        unwrap so consumers (SchwabDataLayer S.5.6e onwards) work with a
+        clean structure.
 
         Args:
-            underlying: Stock ticker
-            expiration: Specific expiration date (YYYY-MM-DD), or None for all
-            strike_count: Number of strikes around ATM
+            underlying: Stock ticker (e.g. "SPY", "QQQ").
+            expiration: Single date YYYY-MM-DD to filter to (sets Schwab
+                fromDate=toDate=expiration). None → all expirations.
+            strike_count: Strikes ABOVE and BELOW ATM (so 2*N total).
+                Default 20 → ~40 strikes returned.
 
         Returns:
-            dict with calls and puts arrays, each containing strike, bid, ask,
-            last, volume, OI, IV, Greeks
+            Normalized chain dict with this shape (all numerics float or
+            int; absent Schwab fields default to 0.0 / 0):
+
+                {
+                    "underlying": "SPY",
+                    "ts":         <unix_float>,
+                    "spot": {
+                        "last":       float,
+                        "bid":        float,
+                        "ask":        float,
+                        "mark":       float,
+                        "volatility": float,  # HV from Schwab
+                    },
+                    "calls": {
+                        "2026-06-19": {           # exp_date str
+                            "450.0": {            # strike str (Schwab format)
+                                "bid":   float,
+                                "ask":   float,
+                                "mark":  float,
+                                "last":  float,
+                                "iv":    float,   # Schwab "volatility"
+                                "delta": float,
+                                "gamma": float,
+                                "theta": float,
+                                "vega":  float,
+                                "volume": int,    # Schwab "totalVolume"
+                                "oi":     int,    # Schwab "openInterest"
+                                "dte":    int,    # computed from exp_key
+                            },
+                            ...
+                        },
+                        ...
+                    },
+                    "puts":  { ...same shape as calls... },
+                    "expirations": ["2026-06-19", ...],  # sorted ascending
+                }
+
+        Raises:
+            SchwabAPIError: If Schwab returns non-200 (after one 401 retry).
+                Network errors propagate natively (httpx.RequestError).
+            SchwabAuthError: If the 401 retry's _refresh_access_token fails.
+
+        Notes:
+            - Strike dict keys are strings (Schwab native format). Convert at
+              iteration time: `float(strike_str)`. Strike is NOT included as
+              a field inside the contract — the outer dict key is the source
+              of truth.
+            - Defensive defaults: missing numeric fields → 0.0 (or 0 for
+              int counts). Schwab occasionally returns explicit None for
+              greeks on deep OTM/ITM strikes; the `or 0.0` idiom catches
+              both missing-key and None-value cases.
+            - 401 retry pattern is consistent with get_price_history
+              (max 1 retry with explicit _refresh_access_token in between).
         """
         self._ensure_authenticated()
         self.rate_limiter.wait_if_needed()
 
-        # TODO: Port from Eolo
-        raise NotImplementedError("Port from Eolo: get_options_chain")
+        params = {
+            "symbol":                 underlying,
+            "contractType":           self.DEFAULT_OPTIONS_CONTRACT_TYPE,
+            "strikeCount":            strike_count,
+            "includeUnderlyingQuote": "true",
+            "strategy":               self.DEFAULT_OPTIONS_STRATEGY,
+            "range":                  self.DEFAULT_OPTIONS_RANGE,
+            "optionType":             "ALL",
+        }
+        if expiration is not None:
+            params["fromDate"] = expiration
+            params["toDate"] = expiration
+
+        headers = {
+            "Authorization": f"Bearer {self.credentials.access_token}",
+            "Accept": "application/json",
+        }
+
+        for attempt in range(2):
+            response = httpx.get(
+                self.CHAINS_URL,
+                headers=headers,
+                params=params,
+                timeout=15,
+            )
+
+            if response.status_code == 200:
+                raw = response.json()
+                normalized = self._normalize_options_chain(underlying, raw)
+                logger.debug(
+                    "Fetched options chain for %s — %d expirations, "
+                    "%d call strikes, %d put strikes",
+                    underlying,
+                    len(normalized["expirations"]),
+                    sum(len(s) for s in normalized["calls"].values()),
+                    sum(len(s) for s in normalized["puts"].values()),
+                )
+                return normalized
+
+            if response.status_code == 401 and attempt == 0:
+                logger.warning(
+                    "Schwab chains 401 for %s — refreshing token and retrying",
+                    underlying,
+                )
+                self._refresh_access_token()
+                headers["Authorization"] = f"Bearer {self.credentials.access_token}"
+                continue
+
+            raise SchwabAPIError(
+                f"Schwab /chains returned {response.status_code} "
+                f"for {underlying}: {response.text[:200]}"
+            )
+
+        raise SchwabAPIError(
+            f"Schwab /chains: unexpected control flow for {underlying}"
+        )
+
+    def _normalize_options_chain(self, underlying: str, raw: dict) -> dict:
+        """Convert Schwab's raw chains response into a normalized dict.
+
+        Schwab returns callExpDateMap/putExpDateMap keyed by
+        "YYYY-MM-DD:DTE" with strikes whose values are single-element
+        contract lists. We unwrap into {exp_date: {strike_str: contract}}
+        and extract the documented field set (see get_options_chain
+        docstring for shape).
+
+        Args:
+            underlying: Ticker (added to result as-is — Schwab's
+                "underlying.symbol" may not always match if it's e.g. an
+                index).
+            raw: Schwab's response.json().
+
+        Returns:
+            Normalized chain dict.
+        """
+        uq = raw.get("underlying") or {}
+        spot = {
+            "last":       uq.get("last", 0.0)       or 0.0,
+            "bid":        uq.get("bid", 0.0)        or 0.0,
+            "ask":        uq.get("ask", 0.0)        or 0.0,
+            "mark":       uq.get("mark", 0.0)       or 0.0,
+            "volatility": uq.get("volatility", 0.0) or 0.0,
+        }
+        calls = self._parse_option_exp_map(raw.get("callExpDateMap") or {})
+        puts  = self._parse_option_exp_map(raw.get("putExpDateMap")  or {})
+        expirations = sorted(set(calls.keys()) | set(puts.keys()))
+
+        return {
+            "underlying":  underlying,
+            "ts":          time.time(),
+            "spot":        spot,
+            "calls":       calls,
+            "puts":        puts,
+            "expirations": expirations,
+        }
+
+    def _parse_option_exp_map(self, exp_map: dict) -> dict:
+        """Parse Schwab's callExpDateMap/putExpDateMap into a clean dict.
+
+        Schwab keys: "YYYY-MM-DD:DTE" (e.g. "2026-06-19:30"). Strikes are
+        keyed by stringified strike ("450.0"), with single-element lists as
+        contract values. Malformed keys (missing ":DTE" suffix, or DTE not
+        an int) are logged and skipped — defensive against Schwab schema
+        drift, but visible so operator can see if Schwab changes format.
+
+        Args:
+            exp_map: Schwab's callExpDateMap or putExpDateMap.
+
+        Returns:
+            {exp_date_str: {strike_str: contract_dict}} with 12 fields per
+            contract (4 prices + 5 greeks + 2 liquidity + dte).
+        """
+        result: dict = {}
+        for exp_key, strikes in exp_map.items():
+            try:
+                exp_date, dte_str = exp_key.split(":", 1)
+                dte = int(dte_str)
+            except (ValueError, AttributeError):
+                logger.warning("Skipping malformed exp_key: %s", exp_key)
+                continue
+
+            result[exp_date] = {}
+            for strike_str, contracts in strikes.items():
+                if not contracts:
+                    continue
+                c = contracts[0]  # Schwab nests one contract per strike/exp
+                result[exp_date][strike_str] = {
+                    "bid":    c.get("bid", 0.0)         or 0.0,
+                    "ask":    c.get("ask", 0.0)         or 0.0,
+                    "mark":   c.get("mark", 0.0)        or 0.0,
+                    "last":   c.get("last", 0.0)        or 0.0,
+                    "iv":     c.get("volatility", 0.0)  or 0.0,
+                    "delta":  c.get("delta", 0.0)       or 0.0,
+                    "gamma":  c.get("gamma", 0.0)       or 0.0,
+                    "theta":  c.get("theta", 0.0)       or 0.0,
+                    "vega":   c.get("vega", 0.0)        or 0.0,
+                    "volume": c.get("totalVolume", 0)   or 0,
+                    "oi":     c.get("openInterest", 0)  or 0,
+                    "dte":    dte,
+                }
+        return result
 
     def get_price_history(
         self,
