@@ -36,6 +36,7 @@ EXPECTED_TABLES = {
     ("portfolio", "positions"),
     ("market",    "ohlcv"),
     ("market",    "iv_surface"),
+    ("market",    "iv_history"),
     ("analytics", "agent_performance"),
     ("analytics", "calibration"),
     ("analytics", "llm_costs"),
@@ -51,6 +52,7 @@ EXPECTED_HYPERTABLES = {
     ("portfolio", "snapshots"),
     ("market",    "ohlcv"),
     ("market",    "iv_surface"),
+    ("market",    "iv_history"),
     ("analytics", "agent_performance"),
     ("analytics", "llm_costs"),
 }
@@ -63,6 +65,7 @@ EXPECTED_MIGRATION_VERSIONS = {
     "V015",
     "V016",
     "V017",
+    "V018",
 }
 
 EXPECTED_AGENT_IDS = {"athena", "apollo", "hermes", "nyx", "vesta", "atlas"}
@@ -120,6 +123,7 @@ class TestHypertables:
         results = {(row[0], row[1]): row[2] for row in cur.fetchall()}
         assert ("market", "ohlcv") in results, "market.ohlcv has no time dimension"
         assert ("market", "iv_surface") in results, "market.iv_surface has no time dimension"
+        assert ("market", "iv_history") in results, "market.iv_history has no time dimension"
         assert ("messages", "agent_messages") in results, "messages.agent_messages has no time dimension"
         # Verify intervals are non-null (actual value depends on TimescaleDB version repr)
         for key, interval in results.items():
@@ -144,6 +148,7 @@ class TestIndexes:
             ("trades",    "critiques",     "idx_critiques_correlation"),
             ("trades",    "executions",    "idx_executions_correlation"),
             ("market",    "ohlcv",         "idx_ohlcv_ticker_tf_time"),
+            ("market",    "iv_history",    "idx_iv_history_ticker_time"),
             ("analytics", "risk_mode_transitions", "idx_risk_transitions_time"),
             ("analytics", "agent_trust_scores",    "idx_trust_lookup"),
         ]
