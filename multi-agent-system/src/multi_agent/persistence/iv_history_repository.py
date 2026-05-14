@@ -10,7 +10,7 @@ if IvHistoryWorker recovers + retries (D7 startup recovery check).
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -122,3 +122,28 @@ class IvHistoryRepository:
             )
             result = cur.fetchone()
         return int(result[0]) if result else 0
+
+    def has_snapshot_today(self, ticker: str, snapshot_date: date) -> bool:
+        """Check if iv_history has a row for the given ticker on the given date.
+
+        Used by IvHistoryWorker (S.6.iv-c) for canary check: if SPY has
+        snapshot today, skip the snapshot run (assume universe-coherent
+        daily semantics).
+
+        Args:
+            ticker: Ticker symbol to check.
+            snapshot_date: Date (UTC) to query.
+
+        Returns:
+            True if at least one row exists for (ticker, snapshot_date).
+        """
+        with self._pool.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1 FROM market.iv_history
+                WHERE ticker = %s AND DATE(ts) = %s
+                LIMIT 1
+                """,
+                (ticker, snapshot_date),
+            )
+            return cur.fetchone() is not None

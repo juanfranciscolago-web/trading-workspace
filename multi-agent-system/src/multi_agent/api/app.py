@@ -96,6 +96,10 @@ async def _lifespan(app: FastAPI):
     from multi_agent.alerts.router import AlertRouter
     from multi_agent.alerts.sinks.telegram import TelegramSink
     from multi_agent.alerts.worker import AlertWorker
+    from multi_agent.data_layer import SchwabDataLayer
+    from multi_agent.persistence.iv_history_repository import IvHistoryRepository
+    from multi_agent.workers.iv_history_worker import IvHistoryWorker
+    from shared_core.brokers.schwab_client import SchwabClient
 
     # Emit warnings that couldn't be logged at import time (logging not yet configured)
     settings.log_startup_warnings()
@@ -222,6 +226,20 @@ async def _lifespan(app: FastAPI):
     logger.info("✓ AlertWorker + RetryWorker started (retry_interval=%ds)",
                 settings.ALERT_RETRY_INTERVAL_SECONDS)
 
+    # ── IvHistoryWorker (Sprint 6 S.6.iv-c) ─────────────────────────────────
+    # Conditional: only when USE_SCHWAB_DATA_LAYER active (D-η, fails closed).
+    # Worker construye su propio SchwabClient (Opción C). Doble construcción
+    # accepted como tech debt — registered ADR-005 §9.3 close-out S.6.iv-f.
+    iv_worker = None
+    iv_task = None
+    if settings.USE_SCHWAB_DATA_LAYER and isinstance(app.state.data_layer, SchwabDataLayer):
+        iv_repo = IvHistoryRepository(pool)
+        iv_schwab_client = SchwabClient.from_gcp()
+        iv_worker = IvHistoryWorker(repo=iv_repo, schwab_client=iv_schwab_client)
+        iv_task = asyncio.create_task(iv_worker.run())
+        app.state.iv_worker = iv_worker
+        logger.info("✓ IvHistoryWorker active (snapshot 21:15 UTC daily)")
+
     # Telegram bot — inbound command polling.
     # Pool injected via bot_data so handlers share the same pool as the API
     # (no get_pool() singleton divergence). Fail-isolated: errors here must
@@ -260,9 +278,14 @@ async def _lifespan(app: FastAPI):
 
     alert_worker.shutdown()
     retry_worker.shutdown()
+    if iv_worker is not None:
+        iv_worker.shutdown()
+    tasks_to_gather = [worker_task, retry_task]
+    if iv_task is not None:
+        tasks_to_gather.append(iv_task)
     try:
         await asyncio.wait_for(
-            asyncio.gather(worker_task, retry_task, return_exceptions=True),
+            asyncio.gather(*tasks_to_gather, return_exceptions=True),
             timeout=10.0,
         )
     except (asyncio.TimeoutError, asyncio.CancelledError):

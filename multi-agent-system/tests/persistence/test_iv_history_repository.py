@@ -6,7 +6,7 @@ No real DB hit — integration tests would belong en tests/db/ separate.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock
 
@@ -161,3 +161,30 @@ class TestCountForTicker:
         repo = IvHistoryRepository(pool)
 
         assert repo.count_for_ticker("SPY") == 0
+
+
+# ── TestHasSnapshotToday ─────────────────────────────────────────────────────
+
+class TestHasSnapshotToday:
+    """has_snapshot_today() — D-θ canary check used by IvHistoryWorker."""
+
+    def test_returns_true_when_row_exists(self):
+        pool, cursor = _make_pool_and_cursor()
+        cursor.fetchone.return_value = (1,)
+        repo = IvHistoryRepository(pool)
+
+        result = repo.has_snapshot_today("SPY", date(2026, 5, 14))
+
+        assert result is True
+        sql, params = cursor.execute.call_args[0]
+        assert "SELECT 1 FROM market.iv_history" in sql
+        assert "DATE(ts) = %s" in sql
+        assert "LIMIT 1" in sql
+        assert params == ("SPY", date(2026, 5, 14))
+
+    def test_returns_false_when_no_row(self):
+        pool, cursor = _make_pool_and_cursor()
+        cursor.fetchone.return_value = None
+        repo = IvHistoryRepository(pool)
+
+        assert repo.has_snapshot_today("SPY", date(2026, 5, 14)) is False
