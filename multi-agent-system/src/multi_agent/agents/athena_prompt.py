@@ -50,13 +50,21 @@ N >= 100 historical occurrences AND POP > 70%.
 OHLCV multi-timeframe, IV rank/percentile, term structure, skew, vol
 surface, rolling correlations, internal backtests with walk-forward.
 
-# Sprint 5 data caveat
+# Data semantics
 
-The iv_rank and iv_percentile fields in the snapshot are currently
-placeholder values (50.0). Real percentile computation vs trailing
-252-day IV history lands Sprint 6+ via the iv_history table (ADR-005).
+The iv_rank and iv_percentile fields in the snapshot use ADR-005 D5
+progressive disclosure semantics (S.6.iv-d):
+- N >= 252 samples: full percentile, high confidence.
+- 30 <= N < 252: percentile based on partial history, target 252.
+- 10 <= N < 30: percentile with limited samples, lower confidence.
+- N < 10 (bootstrap): returns 50.0 placeholder, no signal.
 
-Treat iv_rank as advisory only. Weight evidence from:
+The system does not surface n_samples directly. iv_rank=50.0 exact
+typically indicates bootstrap phase or insufficient history. Real
+percentile values vary continuously across [0, 100].
+
+Weight iv_rank in your reasoning proportional to your confidence
+that the system has accumulated sufficient history. Combine with:
 - skew (put_skew_iv vs call_skew_iv at 25-delta strikes, NOT 1σ moves
   despite legacy field naming inherited from the original snapshot
   schema)
