@@ -6,6 +6,8 @@ IvHistoryRepository.write_snapshot for each ticker with valid ATM IV.
 
 ADR-005 references:
 - D3: ATM IV = avg(call.iv, put.iv) at strike closest to spot.
+      (Compute logic lives en `multi_agent.data_layer.iv_compute` —
+       single source of truth shared with SchwabDataLayer per S.6.iv-d.)
 - D4: 21:15 UTC daily timing.
 - D7: Custom asyncio worker (NO APScheduler).
 - D10: Weekend skip via datetime.weekday(); holiday detection via Schwab
@@ -20,6 +22,7 @@ import logging
 from datetime import datetime, timezone
 
 from multi_agent.data_layer.universe import TICKER_UNIVERSE
+from multi_agent.data_layer.iv_compute import compute_atm_iv
 from multi_agent.persistence.iv_history_repository import IvHistoryRepository
 from shared_core.brokers.schwab_client import SchwabClient
 
@@ -156,7 +159,7 @@ class IvHistoryWorker:
             return
 
         spot = chain.get("spot", {}).get("last", 0.0)
-        atm_iv = self._compute_atm_iv(chain, spot)
+        atm_iv = compute_atm_iv(chain, spot)
 
         if atm_iv is None:
             logger.warning("Could not compute ATM IV for %s (both call/put missing)", ticker)
@@ -168,41 +171,6 @@ class IvHistoryWorker:
             atm_iv=atm_iv,
             underlying_close=spot if spot > 0 else None,
         )
-
-    @staticmethod
-    def _compute_atm_iv(chain: dict, spot: float) -> float | None:
-        """Compute ATM IV per ADR-005 D3.
-
-        ATM strike = strike closest to spot in first expiration.
-        ATM IV = avg(call.iv, put.iv); fallback non-zero side; None if both 0.
-        """
-        expirations = chain.get("expirations", [])
-        if not expirations or spot <= 0:
-            return None
-
-        first_exp = expirations[0]
-        calls = chain.get("calls", {}).get(first_exp, {})
-        puts = chain.get("puts", {}).get(first_exp, {})
-
-        if not calls and not puts:
-            return None
-
-        # Find ATM strike (closest to spot) — use calls dict primarily.
-        strikes_dict = calls or puts
-        if not strikes_dict:
-            return None
-        atm_strike = min(strikes_dict.keys(), key=lambda s: abs(float(s) - spot))
-
-        call_iv = calls.get(atm_strike, {}).get("iv", 0.0) if calls else 0.0
-        put_iv = puts.get(atm_strike, {}).get("iv", 0.0) if puts else 0.0
-
-        if call_iv > 0 and put_iv > 0:
-            return (call_iv + put_iv) / 2
-        if call_iv > 0:
-            return call_iv
-        if put_iv > 0:
-            return put_iv
-        return None
 
     def _compute_snapshot_ts(self) -> datetime:
         """Fixed ts at 21:15:00 UTC sharp today (Q4 idempotency)."""

@@ -15,6 +15,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,10 +23,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from multi_agent.config import Settings, settings
 from multi_agent.data_layer.interfaces import DataLayer
 
+if TYPE_CHECKING:
+    from multi_agent.persistence.iv_history_repository import IvHistoryRepository
+
 logger = logging.getLogger(__name__)
 
 
-def _select_data_layer(settings_obj: Settings) -> DataLayer:
+def _select_data_layer(
+    settings_obj: Settings,
+    iv_history_repo: IvHistoryRepository | None = None,
+) -> DataLayer:
     """Construct the DataLayer per USE_SCHWAB_DATA_LAYER flag.
 
     Fail-fast contract (D-mmm): if USE_SCHWAB_DATA_LAYER=True but
@@ -37,6 +44,11 @@ def _select_data_layer(settings_obj: Settings) -> DataLayer:
     Args:
         settings_obj: Settings instance (passed explicitly for testability
             instead of reading the module-level `settings`).
+        iv_history_repo: Optional IvHistoryRepository for real iv_rank
+            compute (S.6.iv-d). Passed by lifespan when
+            USE_SCHWAB_DATA_LAYER=True. None for tests / StubDataLayer path /
+            fallback — SchwabDataLayer falls back to iv_rank=50.0 per
+            ADR-005 D5 N<10 semantics when None.
 
     Returns:
         SchwabDataLayer if flag enabled and construction succeeds; otherwise
@@ -55,10 +67,14 @@ def _select_data_layer(settings_obj: Settings) -> DataLayer:
 
         try:
             schwab_client = SchwabClient.from_gcp()
-            data_layer = SchwabDataLayer(schwab_client)
+            data_layer = SchwabDataLayer(
+                schwab_client,
+                iv_history_repo=iv_history_repo,
+            )
+            iv_mode = "real (ADR-005 D5)" if iv_history_repo else "50.0 fallback"
             logger.info(
-                "✓ SchwabDataLayer active (real broker data, "
-                "iv_rank=50.0 placeholder per ADR-004 D3)"
+                "✓ SchwabDataLayer active (real broker data, iv_rank=%s)",
+                iv_mode,
             )
             return data_layer
         except Exception:
@@ -137,6 +153,16 @@ async def _lifespan(app: FastAPI):
         app.state.trading_mode["source"],
     )
 
+    # iv_history_repo: built unconditionally-conditional. When
+    # USE_SCHWAB_DATA_LAYER=True, we instantiate now (before _select_data_layer)
+    # so SchwabDataLayer + IvHistoryWorker share the same repo instance.
+    # When False (StubDataLayer path), keep None — SchwabDataLayer fallback
+    # path also accepts None per ADR-005 D5 (S.6.iv-d).
+    iv_history_repo: IvHistoryRepository | None = None
+    if settings.USE_SCHWAB_DATA_LAYER:
+        iv_history_repo = IvHistoryRepository(pool)
+    app.state.iv_history_repo = iv_history_repo
+
     # ATHENA real agent dependencies (Sprint 3 B.3.5).
     # Config path: env override + project-root fallback (mirrors risk/config.py).
     default_router_config = (
@@ -145,7 +171,7 @@ async def _lifespan(app: FastAPI):
     )
     router_config_path = os.environ.get("CLAUDE_ROUTER_CONFIG", str(default_router_config))
     app.state.claude_router = ClaudeRouter.from_config(router_config_path)
-    app.state.data_layer = _select_data_layer(settings)
+    app.state.data_layer = _select_data_layer(settings, iv_history_repo=iv_history_repo)
     logger.info(
         "✓ ATHENA dependencies ready: claude_router (config=%s), data_layer=%s",
         router_config_path,
@@ -229,13 +255,17 @@ async def _lifespan(app: FastAPI):
     # ── IvHistoryWorker (Sprint 6 S.6.iv-c) ─────────────────────────────────
     # Conditional: only when USE_SCHWAB_DATA_LAYER active (D-η, fails closed).
     # Worker construye su propio SchwabClient (Opción C). Doble construcción
-    # accepted como tech debt — registered ADR-005 §9.3 close-out S.6.iv-f.
+    # de SchwabClient accepted como tech debt — registered ADR-005 §9.3
+    # close-out S.6.iv-f. iv_history_repo IS shared with SchwabDataLayer
+    # (constructed above line 140 + stored en app.state.iv_history_repo).
     iv_worker = None
     iv_task = None
     if settings.USE_SCHWAB_DATA_LAYER and isinstance(app.state.data_layer, SchwabDataLayer):
-        iv_repo = IvHistoryRepository(pool)
         iv_schwab_client = SchwabClient.from_gcp()
-        iv_worker = IvHistoryWorker(repo=iv_repo, schwab_client=iv_schwab_client)
+        iv_worker = IvHistoryWorker(
+            repo=app.state.iv_history_repo,
+            schwab_client=iv_schwab_client,
+        )
         iv_task = asyncio.create_task(iv_worker.run())
         app.state.iv_worker = iv_worker
         logger.info("✓ IvHistoryWorker active (snapshot 21:15 UTC daily)")

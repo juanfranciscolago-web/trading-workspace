@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from multi_agent.data_layer.iv_compute import compute_atm_iv
 from multi_agent.workers.iv_history_worker import IvHistoryWorker
 
 
@@ -79,11 +80,11 @@ def _make_datetime_mock(fake_now: datetime):
 # ── TestComputeAtmIv ─────────────────────────────────────────────────────────
 
 class TestComputeAtmIv:
-    """_compute_atm_iv static method — D3 logic isolated."""
+    """compute_atm_iv pure function — D3 logic isolated (S.6.iv-d)."""
 
     def test_avg_call_put_at_atm_strike(self):
         # ATM strike 450, call iv=0.20, put iv=0.21 → avg=0.205
-        result = IvHistoryWorker._compute_atm_iv(_SAMPLE_CHAIN, spot=450.0)
+        result = compute_atm_iv(_SAMPLE_CHAIN, spot=450.0)
         assert result == pytest.approx(0.205)
 
     def test_fallback_to_call_only_when_put_missing(self):
@@ -93,7 +94,7 @@ class TestComputeAtmIv:
             "calls": {"2026-06-19": {"450.0": {"iv": 0.20}}},
             "puts": {},
         }
-        result = IvHistoryWorker._compute_atm_iv(chain, spot=450.0)
+        result = compute_atm_iv(chain, spot=450.0)
         assert result == 0.20
 
     def test_fallback_to_put_only_when_call_missing(self):
@@ -103,7 +104,7 @@ class TestComputeAtmIv:
             "calls": {},
             "puts": {"2026-06-19": {"450.0": {"iv": 0.24}}},
         }
-        result = IvHistoryWorker._compute_atm_iv(chain, spot=450.0)
+        result = compute_atm_iv(chain, spot=450.0)
         assert result == 0.24
 
     def test_returns_none_when_both_zero(self):
@@ -113,16 +114,16 @@ class TestComputeAtmIv:
             "calls": {"2026-06-19": {"450.0": {"iv": 0.0}}},
             "puts": {"2026-06-19": {"450.0": {"iv": 0.0}}},
         }
-        result = IvHistoryWorker._compute_atm_iv(chain, spot=450.0)
+        result = compute_atm_iv(chain, spot=450.0)
         assert result is None
 
     def test_returns_none_for_empty_expirations(self):
         chain = {"expirations": [], "spot": {"last": 450.0}}
-        result = IvHistoryWorker._compute_atm_iv(chain, spot=450.0)
+        result = compute_atm_iv(chain, spot=450.0)
         assert result is None
 
     def test_returns_none_for_invalid_spot(self):
-        result = IvHistoryWorker._compute_atm_iv(_SAMPLE_CHAIN, spot=0.0)
+        result = compute_atm_iv(_SAMPLE_CHAIN, spot=0.0)
         assert result is None
 
 

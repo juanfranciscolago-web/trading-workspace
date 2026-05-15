@@ -4,9 +4,11 @@ SchwabDataLayer — real broker-backed MarketState for Sprint 5+.
 Wraps SchwabClient (auth + get_price_history + get_options_chain) and maps
 Schwab's responses to the DataLayer / MarketState shape that ATHENA consumes.
 
-Sprint 5 caveats (per ADR-004):
-    - iv_rank / iv_percentile are placeholders (default 50.0). Real percentile
-      vs trailing 252 days lands Sprint 6+ via iv_history table (ADR-005).
+Sprint 5/6 caveats (per ADR-004 + ADR-005):
+    - iv_rank / iv_percentile: computed per ADR-005 D5 progressive disclosure
+      from iv_history table (S.6.iv-d). Fallback to 50.0 when iv_history_repo
+      is None (testing) or N<10 days history (bootstrap phase). Per D6,
+      iv_percentile = iv_rank in Phase 1 (same value, semantic reserve).
     - ohlcv_hourly is intentionally empty (D-η: hourly resample deferred to
       Sprint 6+ when HERMES tactical lands).
     - skew uses 25-delta strikes (ADR-004 D5), NOT 1σ moves despite
@@ -22,9 +24,17 @@ import logging
 import math
 import statistics
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
+from shared_core.brokers.schwab_client import SchwabClient
+from shared_core.utils.indicators import iv_rank as _shared_iv_rank
 
 from .interfaces import DataLayer, MarketState, OHLCV, SkewSnapshot, TickerSnapshot
+from .iv_compute import compute_atm_iv
 from .universe import TICKER_UNIVERSE
+
+if TYPE_CHECKING:
+    from ..persistence.iv_history_repository import IvHistoryRepository
 
 logger = logging.getLogger(__name__)
 
@@ -47,20 +57,30 @@ class SchwabDataLayer(DataLayer):
     in TICKER_UNIVERSE, builds TickerSnapshots, computes pairwise correlations
     from log returns, and returns a MarketState.
 
-    iv_rank / iv_percentile are placeholders (default 50.0) until iv_history
-    table lands Sprint 6+.
+    iv_rank / iv_percentile: computed per ADR-005 D5 progressive disclosure
+    when iv_history_repo is provided. Falls back to 50.0 when None (testing)
+    or N<10 historical samples (bootstrap, per D5). D6: iv_percentile mirrors
+    iv_rank in Phase 1.
     """
 
     def __init__(
         self,
-        schwab_client,  # SchwabClient (duck-typed to keep tests mock-friendly)
-        *,
-        iv_rank_default: float = 50.0,
-        iv_percentile_default: float = 50.0,
+        schwab_client: SchwabClient,
+        iv_history_repo: IvHistoryRepository | None = None,
     ) -> None:
+        """Init SchwabDataLayer.
+
+        Args:
+            schwab_client: SchwabClient instance. Duck-typed at runtime;
+                MagicMock passes through (annotations not enforced).
+            iv_history_repo: Optional IvHistoryRepository for real iv_rank
+                compute (S.6.iv-d). If None, iv_rank/iv_percentile fall back
+                to 50.0 placeholder per ADR-005 D5 N<10 semantics. Wired by
+                lifespan when USE_SCHWAB_DATA_LAYER=True. NOT required to
+                preserve testability of existing 22 SchwabDataLayer tests.
+        """
         self._client = schwab_client
-        self._iv_rank_default = iv_rank_default
-        self._iv_percentile_default = iv_percentile_default
+        self._iv_history_repo = iv_history_repo
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -114,16 +134,99 @@ class SchwabDataLayer(DataLayer):
         realized_vol_30d = self._compute_realized_vol(daily_candles[-30:])
         skew = self._build_skew_from_chain(chain, last_price)
 
+        # iv_rank/iv_percentile per ADR-005 D5 + D6 (S.6.iv-d).
+        current_atm_iv = compute_atm_iv(chain, last_price)
+        if current_atm_iv is None:
+            # No valid ATM IV in today's chain → cannot compute iv_rank.
+            # Distinct from N<10 case: this is "today's data unavailable",
+            # that one is "history insufficient".
+            logger.debug(
+                "iv_rank fallback to 50.0 (no current ATM IV from chain)",
+                extra={"ticker": ticker},
+            )
+            iv_rank_value = 50.0
+        else:
+            iv_rank_value = self._compute_iv_rank_progressive(
+                ticker, current_atm_iv,
+            )
+
         return TickerSnapshot(
             ticker=ticker,
             last_price=round(last_price, 2),
             ohlcv_daily=daily_candles,
             ohlcv_hourly=[],                                # D-η deferred
-            iv_rank=self._iv_rank_default,
-            iv_percentile=self._iv_percentile_default,
+            iv_rank=iv_rank_value,
+            iv_percentile=iv_rank_value,                    # D6: mirror Phase 1
             skew=skew,
             realized_vol_30d=round(realized_vol_30d, 4),
         )
+
+    # ── iv_rank compute (ADR-005 S.6.iv-d) ────────────────────────────────────
+
+    def _compute_iv_rank_progressive(
+        self,
+        ticker: str,
+        current_iv: float,
+    ) -> float:
+        """Compute iv_rank with D5 progressive disclosure (ADR-005 S.6.iv-d).
+
+        Thresholds (per ADR-005 D5):
+            iv_history_repo is None or N < 10  → 50.0  (DEBUG)
+            10 <= N < 30                       → percentile  (WARNING)
+            30 <= N < 252                      → percentile  (INFO)
+            N >= 252                           → percentile  (DEBUG)
+
+        Uses shared_core.utils.indicators.iv_rank (min/max formula) as the
+        canonical percentile; thin D5 logic wraps it for log-level routing
+        and N<10 hardcoded fallback.
+
+        Args:
+            ticker: Ticker for log context.
+            current_iv: Today's ATM IV (from compute_atm_iv on current chain).
+
+        Returns:
+            iv_rank value in [0, 100]. 50.0 fallback when insufficient
+            history or no iv_history_repo wired.
+        """
+        if self._iv_history_repo is None:
+            # Fallback path — fresh deploy without iv_history wired (tests,
+            # or USE_SCHWAB_DATA_LAYER=True but iv_history feature off).
+            logger.debug(
+                "iv_rank fallback to 50.0 (no iv_history_repo)",
+                extra={"ticker": ticker},
+            )
+            return 50.0
+
+        history = self._iv_history_repo.get_history(ticker, days=252)
+        n = len(history)
+
+        if n < 10:
+            # Bootstrap phase — expected during initial ~10-day accumulation.
+            logger.debug(
+                "iv_rank bootstrap (N<10), returning 50.0 placeholder",
+                extra={"ticker": ticker, "n_samples": n},
+            )
+            return 50.0
+
+        rank = _shared_iv_rank(current_iv, history)
+
+        if n < 30:
+            logger.warning(
+                "iv_rank computed on N=%d days only (target 252)",
+                n, extra={"ticker": ticker, "n_samples": n, "iv_rank": rank},
+            )
+        elif n < 252:
+            logger.info(
+                "iv_rank computed on N=%d days (target 252)",
+                n, extra={"ticker": ticker, "n_samples": n, "iv_rank": rank},
+            )
+        else:
+            logger.debug(
+                "iv_rank computed on full N=%d days",
+                n, extra={"ticker": ticker, "n_samples": n, "iv_rank": rank},
+            )
+
+        return rank
 
     # ── Schwab fetch helpers ──────────────────────────────────────────────────
 

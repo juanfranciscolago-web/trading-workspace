@@ -12,6 +12,7 @@ Module-level _make_candles helper generates Schwab-format candle lists.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from math import exp
 from unittest.mock import MagicMock
@@ -349,3 +350,126 @@ class TestSchwabCandleConversion:
         assert result.low == 99.8
         assert result.close == 101.7
         assert result.volume == 1_234_567
+
+
+# ── TestIvRankProgressive ─────────────────────────────────────────────────────
+
+class TestIvRankProgressive:
+    """SchwabDataLayer iv_rank progressive disclosure (ADR-005 D5, S.6.iv-d).
+
+    5 paths tested per D5 thresholds + the no-repo backward-compat baseline:
+      - iv_history_repo=None  → 50.0 fallback  (DEBUG, distinct message)
+      - N < 10                → 50.0 fallback  (DEBUG, bootstrap)
+      - 10 <= N < 30          → percentile     (WARNING)
+      - 30 <= N < 252         → percentile     (INFO)
+      - N >= 252              → percentile     (DEBUG, silent)
+
+    Tests call _compute_iv_rank_progressive directly (focused unit-level)
+    rather than going through snapshot(), to keep assertions tight and
+    avoid the rest of the chain/candles infra.
+    """
+
+    _LOGGER_NAME = "multi_agent.data_layer.schwab_data_layer"
+
+    def test_fallback_50_when_no_iv_history_repo(self):
+        """Default path: no iv_history_repo wired → 50.0 fallback per D5."""
+        layer = SchwabDataLayer(schwab_client=MagicMock())
+        result = layer._compute_iv_rank_progressive("SPY", current_iv=0.20)
+        assert result == 50.0
+
+    def test_fallback_50_when_history_below_10(self):
+        """N=5 (< 10) → 50.0 bootstrap fallback. Repo IS called once."""
+        mock_repo = MagicMock()
+        mock_repo.get_history.return_value = [0.15, 0.16, 0.18, 0.19, 0.20]  # N=5
+
+        layer = SchwabDataLayer(
+            schwab_client=MagicMock(),
+            iv_history_repo=mock_repo,
+        )
+        result = layer._compute_iv_rank_progressive("SPY", current_iv=0.20)
+
+        assert result == 50.0
+        mock_repo.get_history.assert_called_once_with("SPY", days=252)
+
+    def test_computes_with_warning_when_history_10_to_30(self, caplog):
+        """N=20 (10 ≤ N < 30) → percentile + WARNING log."""
+        history = [0.10 + i * 0.01 for i in range(20)]  # [0.10..0.29]
+        mock_repo = MagicMock()
+        mock_repo.get_history.return_value = history
+
+        layer = SchwabDataLayer(
+            schwab_client=MagicMock(),
+            iv_history_repo=mock_repo,
+        )
+
+        with caplog.at_level(logging.WARNING, logger=self._LOGGER_NAME):
+            result = layer._compute_iv_rank_progressive("SPY", current_iv=0.195)
+
+        # current_iv 0.195 sits at midpoint of [0.10, 0.29] → rank ≈ 50.
+        assert result == pytest.approx(50.0, abs=1.0)
+
+        warnings = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == self._LOGGER_NAME
+        ]
+        assert any("iv_rank computed on N=20 days" in r.message for r in warnings)
+
+    def test_computes_with_info_when_history_30_to_252(self, caplog):
+        """N=100 (30 ≤ N < 252) → percentile + INFO log (no WARNING)."""
+        history = [0.10 + i * (0.20 / 99) for i in range(100)]  # [0.10..0.30]
+        mock_repo = MagicMock()
+        mock_repo.get_history.return_value = history
+
+        layer = SchwabDataLayer(
+            schwab_client=MagicMock(),
+            iv_history_repo=mock_repo,
+        )
+
+        with caplog.at_level(logging.INFO, logger=self._LOGGER_NAME):
+            result = layer._compute_iv_rank_progressive("SPY", current_iv=0.20)
+
+        # current_iv 0.20 midpoint of [0.10, 0.30] → rank ≈ 50.
+        assert result == pytest.approx(50.0, abs=1.0)
+
+        infos = [
+            r for r in caplog.records
+            if r.levelno == logging.INFO and r.name == self._LOGGER_NAME
+        ]
+        warnings = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == self._LOGGER_NAME
+        ]
+        assert any("iv_rank computed on N=100 days" in r.message for r in infos)
+        assert len(warnings) == 0
+
+    def test_computes_silently_when_history_above_252(self, caplog):
+        """N=300 (≥ 252) → percentile + DEBUG log (no INFO / WARNING)."""
+        history = [0.10 + i * (0.20 / 299) for i in range(300)]  # [0.10..0.30]
+        mock_repo = MagicMock()
+        mock_repo.get_history.return_value = history
+
+        layer = SchwabDataLayer(
+            schwab_client=MagicMock(),
+            iv_history_repo=mock_repo,
+        )
+
+        with caplog.at_level(logging.DEBUG, logger=self._LOGGER_NAME):
+            result = layer._compute_iv_rank_progressive("SPY", current_iv=0.20)
+
+        assert result == pytest.approx(50.0, abs=1.0)
+
+        debugs = [
+            r for r in caplog.records
+            if r.levelno == logging.DEBUG and r.name == self._LOGGER_NAME
+        ]
+        infos = [
+            r for r in caplog.records
+            if r.levelno == logging.INFO and r.name == self._LOGGER_NAME
+        ]
+        warnings = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == self._LOGGER_NAME
+        ]
+        assert any("iv_rank computed on full N=300 days" in r.message for r in debugs)
+        assert len(infos) == 0
+        assert len(warnings) == 0
