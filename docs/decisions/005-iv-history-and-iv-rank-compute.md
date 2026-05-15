@@ -1,7 +1,7 @@
 # ADR-005: iv_history table and iv_rank percentile compute
 
 **Fecha:** 2026-05-14
-**Estado:** Propuesto
+**Estado:** Aceptado (2026-05-15)
 **Contexto:** Sprint 5 cerrado (commit `c46c463`) con `iv_rank=50.0` placeholder (ADR-004 D3 + §9.3 tech debt #1). Sprint 6+ debe entregar real percentile. Esta ADR define la table architecture + nightly snapshot job + compute path.
 
 ---
@@ -267,18 +267,90 @@ Observability: cuando N transitions across a threshold (10, 30, 252), `IvHistory
 - **`multi-agent-system/src/multi_agent/agents/athena_prompt.py:55-65`**: Sprint 5 caveat block. To be updated S.6.iv-e.
 - **`multi-agent-system/src/multi_agent/api/app.py:211-220`**: alert_worker + retry_worker existing pattern for IvHistoryWorker.
 - **`/Users/JUAN/PycharmProjects/eolo/eolo-options/theta_harvest/earnings_iv_harvest_strategy.py:72-94`**: Eolo `_compute_iv_rank` formula reference.
-- **`docs/operator/schwab-setup.md`**: §7 Future work item #1 (this ADR resolves). Will be updated S.6.iv-f.
+- **`docs/operator/schwab-setup.md`**: Updated S.6.iv-f — new §7 "iv_rank Lifecycle" added; Future Work renumbered to §8 with item #1 marked RESOLVED. Cross-references canonical tech debt IDs en §9.3 below.
 
 ---
 
-## 9. Close-out (S.6.iv-f, pending)
+## 9. Close-out (S.6.iv-f, 2026-05-15)
 
-> Sección se completa en S.6.iv-f. Estructura prevista:
-> - §9.1 Sub-blocks delivered (table con commits + LOC + tests).
-> - §9.2 Rule #15 findings summary (counts per sub-block).
-> - §9.3 Tech debt registered for Sprint 7+.
-> - §9.4 Next steps (ADR-006 si iv_surface populating, HERMES, etc.).
+Sprint 6 iv-history stage cerrado. ADR-005 status: Propuesto → Aceptado.
+WRITE+READ path operational end-to-end: `IvHistoryWorker` escribe nightly
+snapshots at 21:15 UTC, `SchwabDataLayer` lee via `IvHistoryRepository.get_history`
+para real iv_rank/iv_percentile compute per D5 progressive disclosure.
+
+### 9.1 Sub-blocks delivered
+
+| Sub-block | Date | Commit | LOC delta | Tests delta | Description |
+|-----------|------|--------|-----------|-------------|-------------|
+| S.6.iv-a | 2026-05-14 | `44e8f47` | +284 (doc) | 0 | ADR-005 plan firmado (this document) |
+| S.6.iv-b | 2026-05-14 | `462d1bf` | +325 | +10 | V018 migration + `IvHistoryRepository` |
+| S.6.iv-c | 2026-05-14 | `4372033` | +579 | +19 | `IvHistoryWorker` async + lifespan integration |
+| S.6.iv-d | 2026-05-14 | `82cbe10` | +286 | +5 | `SchwabDataLayer` iv_rank real compute + `iv_compute.py` extraction |
+| S.6.iv-e | 2026-05-15 | `d22f573` | +18 | 0 (1 replaced) | ATHENA prompt data semantics post-D5 |
+| S.6.iv-f | 2026-05-15 | (this commit) | ~+260 (doc) | 0 | Operator doc + ADR close-out |
+| **Total** | — | — | **~1,752** | **+34** | — |
+
+Test baseline final: **902 passing** (multi-agent 807 + shared_core 95) + 1
+integration test skipped by design (baseline pre-Sprint-6 era 868 +
+1 skipped). Net +34 tests for iv_history components.
+
+### 9.2 Rule #15 findings summary
+
+Pre-recolección rule #15 disciplinada disparó ~44 findings across sub-blocks. Distribución:
+
+- **S.6.iv-a (10)**: findings A-J — ADR inventory, hypertable precedent, ohlcv unwritten, Eolo `_compute_iv_rank` formula location, market calendar absence, custom asyncio pattern, repository pattern, market.iv_surface unwritten (major catch J).
+- **S.6.iv-b (7)**: findings K-Q — V018 numbering, migration registry pattern, hypertable creation idempotency, IvHistoryRepository signature design, mock pool/cursor pattern, `psycopg3` Decimal cast, ON CONFLICT idempotency.
+- **S.6.iv-c (8)**: findings R-Y — async worker pattern, Schwab from_gcp() doble construcción (Opción C decision), canary SPY check, per-ticker error isolation D-γ, lifespan integration point, weekend skip via weekday, time gate predicate.
+- **S.6.iv-d (12)**: findings F1-F12 — see detail below (most impactful sub-block).
+- **S.6.iv-e (7)**: findings F1-F7 — caveat wording stale, scope ATHENA-only, single test dependency, "1σ" preservation, section heading "Sprint 5" stale, data priorities block intact, progressive treatment guidance.
+
+Most impactful catches across stage:
+
+- **F10 (S.6.iv-d)** ATM IV semantic mismatch entre Worker (avg call+put) y SchwabDataLayer (call-only). iv_rank compararía manzanas con peras. Resolved via `iv_compute.py` extraction — single source of truth. CRITICAL catch.
+- **F1 (S.6.iv-d) REVISADO**: `shared_core/utils/indicators.py::iv_rank()` YA existía con formula correcta. Memoria + ADR-005 D8 wording sugería "port Eolo" — falso. Solo D5 thresholds wrapper era new work.
+- **F11 (S.6.iv-d)**: ADR-005 D6 literal `iv_percentile = iv_rank` Phase 1. D-θ descartada (no compute separado).
+- **J (S.6.iv-a)**: `market.iv_surface` hypertable EXISTS desde V007 unwritten. NEW `market.iv_history` per D1; iv_surface populating elevated a Sprint 7+ ADR candidate.
+- **D-zzzzzzzz (S.6.iv-e)**: "NOT 1σ moves" wrapping preservation literal — primer write quebró el string across 2 líneas (test passed via "1σ" substring igual, but violated preservation goal). Corrected mid-flight.
+
+**Pattern observado:** cada rule #15 firing saved 10-30 min de speculative implementation que habría requerido rework. Pre-recolección riguroso continúa como standard práctica Sprint 7+.
+
+### 9.3 Tech debt registered for Sprint 7+
+
+Canonical numbered list — operator doc `docs/operator/schwab-setup.md` §8 references these IDs exactly (cross-ref policy single source of truth):
+
+1. **SchwabClient doble construcción**: lifespan path (S.5.6f construye for SchwabDataLayer) + worker path (S.6.iv-c construye for IvHistoryWorker). Each calls `SchwabClient.from_gcp()` independently. Trivial cost (~2s GCP call once per process startup). Refactor a single source of truth Sprint 7+ si performance/scaling pain emerges. Opción C tech debt registered S.6.iv-c.
+
+2. **`market.iv_surface` populating**: hypertable EXISTS desde V007 pero NO producer/consumer wired. Future ADR-006 candidate for full IV surface persistence (per-strike + per-expiration IV history, separate from `market.iv_history` daily ATM scalar).
+
+3. **`market.ohlcv` populating**: hypertable exists desde V007 pero NO producer/consumer wired. Sprint 7+ candidate cuando HERMES tactical agent lands con intraday data needs.
+
+4. **`_persisted_at` field on Schwab Firestore writes**: cleaner token expiry tracking. Currently `token_expires_at=None` initial en `from_gcp()`, relies on 401 retry path.
+
+5. **Date-aware correlations alignment**: currently naive same-index log returns. Required Sprint 7+ if VIX o cross-exchange tickers se agregan al universe.
+
+6. **`SchwabClient.from_env()` removal**: zero callers confirmed S.5.6g recolección. Deprecated path safe to remove pending caller audit + separate cleanup commit.
+
+7. **ATHENA prompt caveat handling**: **RESUELTO en S.6.iv-e** — caveat NOT removed, UPDATED con accurate D5 progressive disclosure semantics. Item kept here for history; no further action needed.
+
+8. **Token caching con TTL check**: enable concurrent operation con Eolo sin race condition. Currently mitigated by mutual exclusion durante market hours (operator doc §4).
+
+9. **`TOKEN_SCHWAB` Secret Manager cleanup**: dead `"TU_TOKEN_AQUI"` placeholder, unused desde S.5.6b discovery. Cleanup when GCP Console reviewed.
+
+10. **`SkewSnapshot` field naming `put_25d_iv`/`call_25d_iv`**: currently legacy `put_skew_iv`/`call_skew_iv` field names misleading. Breaking change Sprint 7+ (serialized state migration required). ATHENA prompt en S.6.iv-e references "25-delta" semantic but field names retained.
+
+11. **Historical IV backfill**: D9 firm "NEVER" Phase 1. Sprint 8+ open question si priorities shift toward historical IV richness — evaluation candidate paid CBOE feed integration. Currently forward accumulation only (~1 year bootstrap).
+
+### 9.4 Next steps Sprint 7+
+
+ADR-005 §4 open questions (líneas 208-213) generate ADR candidates separados:
+
+- **ADR-006 candidate** — `market.iv_surface` populating (tech debt #2). Trigger: cuando HERMES Sprint 6+ needs richer per-contract IV, OR when ATHENA / APOLLO benefit from term structure data beyond daily ATM scalar. Decision factors: producer wire-up (Worker extension?), retention policy (longer retention than iv_history?), schema validation per ADR-005 D1 precedent.
+- **ADR-007 candidate** — `market.ohlcv` producer/consumer (tech debt #3). HERMES historical data prerequisite. Sprint 7+ deferred until HERMES tactical agent design.
+- **iv_percentile divergence trigger** (D6 Phase 2). Currently `iv_percentile = iv_rank` literal. Decision when empirical data informs need para absolute scale percentile distinct from min/max formula. Sprint 8+ candidate.
+- **Hysteresis revisit** (D11 firm "no hysteresis" Phase 1). Sprint 7+ revisit si transitions causan noisy ATHENA behavior post-N=10 boundary. Currently mitigated via D-θ canary check + crisp threshold without smoothing.
+
+Sprint 6 iv-history stage successfully closed. Foundation ready for Sprint 7+ feature growth (HERMES tactical, NYX sentiment, APOLLO macro generation, ATLAS portfolio integration).
 
 ---
 
-> **Próximo sub-bloque:** S.6.iv-b (V018 migration + IvHistoryRepository). Inicia tras Juan sign-off de este ADR.
+> **Sprint 6 iv-stage cerrado** (commits 14-15 mayo 2026). Próximo: Sprint 7+ planning — HERMES candidate o ADR-006 (`iv_surface`).

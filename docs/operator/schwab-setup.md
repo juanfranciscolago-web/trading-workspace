@@ -317,28 +317,157 @@ Re-running is safe during market closed periods.
 
 ---
 
-## Section 7 — Future Work (Sprint 6+)
+## Section 7 — iv_rank Lifecycle (Sprint 6 iv-stage onwards)
 
-Registered tech debt from S.5.6 commits for Sprint 6+ resolution:
+`SchwabDataLayer.iv_rank` y `iv_percentile` use ADR-005 D5 progressive
+disclosure semantics post-S.6.iv-d. Operator guidance below covers the
+bootstrap timeline, threshold transitions, and monitoring.
 
-- **`iv_history` table + nightly snapshots** → real `iv_rank` percentile
-  vs trailing 252 days. ADR-005 separate decision.
-- **`_persisted_at` field** in Firestore writes → cleaner token expiry
-  tracking (currently `token_expires_at=None` initial state in `from_gcp`,
-  relies on 401 retry path).
-- **Hourly OHLCV resample** (HERMES Sprint 6+) → currently
-  `ohlcv_hourly=[]` empty in `SchwabDataLayer`.
-- **Date-aware correlations alignment** → currently naive (same-index
-  log returns). Required if Sprint 6+ adds VIX or cross-exchange tickers.
-- **`SchwabClient.from_env()` removal** → confirmed zero callers; safe to
-  remove pending caller audit (S.5.6f Show 1).
-- **ATHENA prompt caveat block removal** → when `iv_history` lands and
-  `iv_rank` becomes real (Sprint 6+).
-- **Token caching with TTL check** → enable concurrent operation with
-  Eolo without race condition (currently mitigated by mutual exclusion
-  during market hours, see Section 4).
-- **`TOKEN_SCHWAB` Secret Manager cleanup** → placeholder dead value
-  (`"TU_TOKEN_AQUI"`), unused. Cleanup when GCP Console reviewed.
+### 7.1 Overview: forward accumulation + bootstrap timeline
+
+iv_history populates **forward only** (ADR-005 D9 firm — NO backfill).
+Each market day at **21:15 UTC**, `IvHistoryWorker` snapshots ATM IV for
+all 6 TICKER_UNIVERSE tickers via `IvHistoryRepository.write_snapshot`.
+
+**Timeline expectations** (Day 0 = process first launch with
+`USE_SCHWAB_DATA_LAYER=true`):
+
+- **Day 0**: iv_history empty. iv_rank returns 50.0 fallback (N=0 < 10).
+- **Days 1-9**: bootstrap phase. iv_rank stays 50.0 (per D5 N<10 threshold).
+- **Day 10**: first real percentile compute. WARNING log emitted (10≤N<30).
+- **Day 30**: WARNING → INFO log transition (30≤N<252).
+- **Day ~252** (~1 trading year): full percentile, DEBUG-silent steady state.
+
+Bootstrap delay (~1 year) is **intentional** per D9 — accepted trade-off
+for clean forward-accumulated history (no synthetic/imputed values).
+
+### 7.2 D5 progressive disclosure 4 thresholds
+
+| N range | iv_rank value | Log level | Confidence |
+|---------|---------------|-----------|------------|
+| N < 10 | 50.0 (fallback) | DEBUG silent | None (bootstrap) |
+| 10 ≤ N < 30 | percentile (limited history) | **WARNING** | Low — operator-visible transition |
+| 30 ≤ N < 252 | percentile (partial year) | INFO | Medium — useful signal |
+| N ≥ 252 | percentile (full year) | DEBUG silent | High — steady state |
+
+Per-call logic resides en `SchwabDataLayer._compute_iv_rank_progressive`
+(see `multi-agent-system/src/multi_agent/data_layer/schwab_data_layer.py`).
+Compute uses `shared_core.utils.indicators.iv_rank` canonical formula
+(`(current - min) / (max - min) * 100`) when N ≥ 10.
+
+D6 mirror: `iv_percentile = iv_rank` literal Phase 1 (same value, semantic
+reserve).
+
+### 7.3 Monitoring: log signals at startup + runtime
+
+**Startup logs** (lifespan):
+
+- `✓ SchwabDataLayer active (real broker data, iv_rank=real (ADR-005 D5))`
+  when `iv_history_repo` wired correctly. If logs `iv_rank=50.0 fallback`
+  instead, repo NOT wired (verify lifespan + `USE_SCHWAB_DATA_LAYER=true`).
+- `✓ IvHistoryWorker active (snapshot 21:15 UTC daily)` confirms Worker
+  scheduled. Missing → Worker NOT running, no daily writes.
+
+**Runtime logs** (per-snapshot, per-ticker):
+
+- `DEBUG iv_rank bootstrap (N<10), returning 50.0 placeholder` — bootstrap.
+- `WARNING iv_rank computed on N=15 days only (target 252)` — transition out
+  of bootstrap. **First WARNING en operator timeline → milestone Day 10**.
+- `INFO iv_rank computed on N=100 days (target 252)` — partial-year operation.
+- `DEBUG iv_rank computed on full N=300 days` — steady state, silent at INFO level.
+
+Structured logging uses `extra={"ticker", "n_samples", "iv_rank"}` for
+JSON handler consumption. Plain stdout shows the format string with
+positional N substitution.
+
+**Nightly worker run logs:**
+
+- `INFO Starting IV snapshot run for ts=2026-05-15T21:15:00+00:00`
+- `INFO IV snapshot run completed: 6/6 tickers ok` (success).
+- `WARNING IV snapshot run completed: 5/6 tickers succeeded` (per-ticker
+  isolation D-γ — 1 ticker failed, worker proceeds).
+- `ERROR IV snapshot run completed: 0/6 tickers succeeded` (worker degraded
+  — Schwab API down or auth lapsed; investigate).
+
+Watch for: missing 21:15 UTC nightly log → IvHistoryWorker not running (check `app.state.iv_worker`).
+
+### 7.4 Troubleshooting: iv_rank stuck at 50.0
+
+If iv_rank returns 50.0 consistently across multiple snapshots:
+
+1. **Bootstrap phase (expected)**: First ~10 days operation. Verify via `count_for_ticker` SQL query below.
+2. **IvHistoryWorker not running**: Check lifespan logs at startup for "✓ IvHistoryWorker active". If missing, verify `USE_SCHWAB_DATA_LAYER=true` + `isinstance(app.state.data_layer, SchwabDataLayer)`.
+3. **Schwab API failure during snapshot**: Check log for per-ticker WARNING lines ("Snapshot failed for ticker=X, skipping"). Per-ticker error isolation D-γ preserva worker stability pero pierde 1 datapoint.
+4. **Holiday/weekend skip (expected)**: Worker skips Saturday/Sunday + empty chain responses (holiday detection D10).
+5. **No `iv_history_repo` wired**: SchwabDataLayer constructed con `iv_history_repo=None` (test path or misconfiguration). Verify lifespan wire-up.
+
+### 7.5 SQL monitoring queries
+
+Verificar iv_history population status:
+
+```sql
+-- Count datapoints per ticker
+SELECT ticker, COUNT(*) AS n_samples, MIN(ts) AS oldest, MAX(ts) AS newest
+FROM market.iv_history
+GROUP BY ticker
+ORDER BY ticker;
+
+-- Verify last 7 days writes
+SELECT ts::date AS day, COUNT(DISTINCT ticker) AS tickers_snapshotted
+FROM market.iv_history
+WHERE ts > NOW() - INTERVAL '7 days'
+GROUP BY ts::date
+ORDER BY day DESC;
+
+-- Check current iv values for steady-state tickers
+SELECT DISTINCT ON (ticker) ticker, atm_iv, ts
+FROM market.iv_history
+ORDER BY ticker, ts DESC;
+```
+
+Hypertable inspection (TimescaleDB):
+
+```sql
+SELECT * FROM timescaledb_information.hypertables WHERE hypertable_name = 'iv_history';
+SELECT * FROM timescaledb_information.chunks WHERE hypertable_name = 'iv_history' ORDER BY range_start DESC LIMIT 5;
+```
+
+---
+
+## Section 8 — Future Work / Tech debt
+
+Items canonical numbered per ADR-005 §9.3 (single source of truth — refer
+`docs/decisions/005-iv-history-and-iv-rank-compute.md` §9.3 for full
+descriptions; cross-references below are summaries):
+
+- **#1 SchwabClient doble construcción** — Sprint 7+ refactor candidate.
+  Lifespan + worker each call `SchwabClient.from_gcp()` independently.
+- **#2 `market.iv_surface` populating** — **ADR-006 candidate** Sprint 7+.
+  Hypertable EXISTS desde V007 unwritten.
+- **#3 `market.ohlcv` populating** — **ADR-007 candidate** HERMES prerequisite.
+- **#4 `_persisted_at` field**: cleaner Schwab Firestore token expiry tracking.
+- **#5 Date-aware correlations alignment**: required if VIX or cross-exchange
+  tickers added to universe.
+- **#6 `SchwabClient.from_env()` removal**: zero callers confirmed S.5.6g
+  recolección, deprecated path safe to remove.
+- **#7 ATHENA prompt caveat** — **✓ RESOLVED en S.6.iv-e** (commit `d22f573`).
+  Caveat NOT removed, UPDATED accurate D5 progressive disclosure semantics.
+- **#8 Token caching con TTL check**: Sprint 7+ concurrent Eolo coexistence
+  improvement.
+- **#9 `TOKEN_SCHWAB` Secret Manager cleanup**: dead `"TU_TOKEN_AQUI"`
+  placeholder, unused desde S.5.6b.
+- **#10 `SkewSnapshot` field naming `put_25d_iv`/`call_25d_iv`**: breaking
+  change Sprint 7+ (serialized state migration required).
+- **#11 Historical IV backfill**: D9 firm "NEVER" Phase 1; Sprint 8+ open
+  question, paid CBOE feed evaluation if priorities shift.
+
+**Previously listed (S.5.6g) — now resolved:**
+
+- **`iv_history` table + nightly snapshots** — **✓ RESOLVED Sprint 6 iv-stage**
+  (commits `462d1bf` V018+Repository, `4372033` Worker+lifespan, `82cbe10`
+  SchwabDataLayer real compute). See ADR-005 §9.1 sub-blocks delivered.
+- **Hourly OHLCV resample** — deferred to HERMES Sprint 7+ per tech debt #3
+  (ohlcv populating via ADR-007 candidate).
 
 ---
 
