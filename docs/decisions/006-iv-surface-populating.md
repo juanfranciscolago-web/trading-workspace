@@ -1,7 +1,7 @@
 # ADR-006: market.iv_surface populating
 
 **Fecha:** 2026-05-15
-**Estado:** Propuesto
+**Estado:** Aceptado (2026-05-16)
 **Contexto:** Sprint 6 iv-history stage cerrado (commits 14-15 mayo 2026). `market.iv_history` table writes ATM IV scalar daily for iv_rank compute. `market.iv_surface` hypertable EXISTS desde V007 pero unwritten — ADR-005 §9.3 tech debt #2. Esta ADR define producer wire-up para populating iv_surface aprovechando chain ya fetched por IvHistoryWorker.
 
 ---
@@ -246,18 +246,82 @@ Smaller scope vs Sprint 6 iv-stage (~1,752 LOC) por: V007 schema reuse + Worker 
 - **`multi-agent-system/src/multi_agent/persistence/iv_history_repository.py`**: IvHistoryRepository pattern to mirror (S.6.iv-b).
 - **`shared_core/src/shared_core/brokers/schwab_client.py:get_options_chain`**: chain shape source (S.5.6d normalized).
 - **`docs/sistema_multiagente_trading.md` §10.7**: NYX Integration — deviation source per D9.
-- **`docs/operator/schwab-setup.md` §7**: iv_rank Lifecycle — to be extended con iv_surface lifecycle S.7.surf-d.
+- **`docs/operator/schwab-setup.md`**: Updated S.7.surf-d — new §8 "iv_surface Lifecycle" added; Future Work renumbered to §9 with iv_surface tech debt IDs registered. Cross-references canonical tech debt IDs en §9.3 below.
 
 ---
 
-## 9. Close-out (S.7.surf-d, pending)
+## 9. Close-out (S.7.surf-d, 2026-05-16)
 
-> Sección se completa en S.7.surf-d. Estructura prevista:
-> - §9.1 Sub-blocks delivered (table con commits + LOC + tests).
-> - §9.2 Rule #15 findings summary (counts per sub-block).
-> - §9.3 Tech debt registered for Sprint 8+.
-> - §9.4 Next steps (Phase 2 consumer surface, NYX Sprint 8+ candidate, retention triggers).
+Sprint 7 iv_surface stage cerrado. ADR-006 status: Propuesto → Aceptado.
+WRITE-only path operational: `IvHistoryWorker._snapshot_one_ticker` extension
+calls `IvSurfaceRepository.write_chain_snapshot` per ticker per snapshot,
+con D3-1 isolation (surface failure NOT blocks iv_history success). Phase 2
+consumer surface (TickerSnapshot extension) deferred per D6.
+
+### 9.1 Sub-blocks delivered
+
+| Sub-block | Date | Commit | LOC delta | Tests delta | Description |
+|-----------|------|--------|-----------|-------------|-------------|
+| S.7.surf-a | 2026-05-15 | `de82465` | +263 (doc) | 0 | ADR-006 plan firmado (this document) |
+| S.7.surf-b | 2026-05-16 | `84ab8c3` | +368 | +11 | `IvSurfaceRepository` + tests (NEW executemany batch pattern D-γ) |
+| S.7.surf-c | 2026-05-16 | `7ac1ee5` | +147 | +5 | `IvHistoryWorker` extension + lifespan wire-up + D3-1 isolation tests |
+| S.7.surf-d | 2026-05-16 | (this commit) | ~+300 (doc) | 0 | Operator doc §8 iv_surface Lifecycle + ADR close-out + daily log |
+| **Total** | — | — | **~1,078** | **+16** | — |
+
+Test baseline final: **918 passing** (multi-agent 823 + shared_core 95) + 1
+integration test skipped by design (baseline pre-Sprint-7 era 902 +
+1 skipped). Net +16 tests for iv_surface components.
+
+### 9.2 Rule #15 findings summary
+
+Pre-recolección rule #15 disciplinada disparó ~32 findings across sub-blocks. Distribución:
+
+- **S.7.surf-a (8)**: ADR-006 plan recolección — V007 schema reuse confirmation, chunk_time_interval 1 day (high-volume), Schwab chain shape per S.5.6d, IvHistoryWorker reuse opportunity, consumer surface scope, D9 backfill firm consistency, retention deferred, masterdoc §10.7 NYX deviation rationale.
+- **S.7.surf-b (9)**: findings F1-F9 — migration registry already includes iv_surface (F1 RELIEF), executemany no precedent (F2 NEW pattern), mock pool/cursor reusable (F3), strike string→float cast (F4 CRITICAL), oi→open_interest mapping (F5 CRITICAL), calls/puts→CALL/PUT normalization (F6 CRITICAL), iv NOT NULL guard (F7), volume sparse vs production (F8), psycopg3 NUMERIC float input (F9).
+- **S.7.surf-c (9 + 1 mid-flight)**: Worker structure, lifespan wire-up pattern, TYPE_CHECKING precedent variance (app.py TYPE_CHECKING vs Worker direct imports — mid-flight correction D-α-1), D3-1 implementation code example, exception scope, fixture extension, 17 existing tests `_make_worker` invocations.
+- **S.7.surf-d (~6)**: ADR-006 §9 placeholder structure, operator doc §7 ya populated (iv_rank Lifecycle desde S.6.iv-f), daily log convention `DAILY_LOG_YYYY-MM-DD.md`, Sprint 7 commits stats, findings real count (~32 vs initial estimate ~10-15), tech debt 5 new items.
+
+Most impactful catches across stage:
+
+- **F4 (S.7.surf-b) CRITICAL**: Schwab chain strike key es STRING ("450.0"), V007 column `strike NUMERIC(14,4)`. Repository casts `float(strike_str)` en write path. Without catch: psycopg3 type error en INSERT.
+- **F5 (S.7.surf-b) CRITICAL**: Schwab `contract["oi"]` vs V007 column `open_interest`. Pre-emptive mapping en row tuple builder. Silent data loss without catch.
+- **F6 (S.7.surf-b) CRITICAL**: Schwab `"calls"`/`"puts"` plural lowercase vs V007 `option_type "CALL"/"PUT"` singular uppercase. Module-level `_OPTION_TYPE_MAP` constant.
+- **F1 (S.7.surf-c) STATE GAP**: Memory claimed S.7.surf-b committed, reality untracked. Pattern repetido también en S.7.surf-d (S.7.surf-c uncommitted at session resume). Atomic commit-per-sub-block hygiene critical.
+- **D-α-1 (S.7.surf-c) MID-FLIGHT**: Pre-recolección F5 memory inaccurate — Worker uses direct imports, not TYPE_CHECKING. Adopted direct import pattern per file convention. App.py mantain TYPE_CHECKING precedent separate.
+
+**Pattern observado:** rule #15 ahorró 10-30 min de speculative implementation per finding. Sprint 7 introduced new state-gap catch pattern (commit lag between sessions) — atomic commits + memory updates required Sprint 8+.
+
+### 9.3 Tech debt registered for Sprint 8+
+
+NEW Sprint 7 items (5 new):
+
+1. **F7 iv=0.0 vs iv=None disambiguation** (S.7.surf-b): `IvSurfaceRepository.write_chain_snapshot` uses `if not iv:` to skip falsy — both None (missing) and 0.0 (legit deep OTM theoretical) get filtered. Future Sprint may need distinguish missing data vs valid zero IV. Edge case for ADR-006 §4 open question.
+
+2. **executemany pattern canonical convention** (S.7.surf-b): NEW pattern introduced — previously single-row execute() in S.6.iv-b. Document Sprint 8+ as canonical for high-volume Repository INSERTs (~900 rows/ticker/snapshot for iv_surface). Future Repositories follow.
+
+3. **D-α-3 MagicMock plain (no spec=IvSurfaceRepository)** (S.7.surf-c): Tests use plain MagicMock for surface_repo. API drift (signature changes) NOT auto-caught. Trade-off accepted: less coupling, faster tests. Sprint 8+ revisit si concrete API drift bugs emerge.
+
+4. **Test 5 positional args check vs kwargs** (S.7.surf-c): `test_surface_called_with_correct_chain_ticker_ts` validates positional args via `call_args[0]`. Intentional drift catch — if Worker code switches to kwargs, test breaks. Documents API contract via test. Future code MUST keep positional `write_chain_snapshot(chain, ticker, ts)`.
+
+5. **D6-1 ATHENA prompt drift** (inherited from ADR-006): ATHENA prompt línea 50-51 mentions "term structure, vol surface" en data priorities pero TickerSnapshot NOT exposes ni term structure ni surface. Reconciliation cuando consumer surface lands Phase 2 (D6 trigger).
+
+**Inherited from ADR-005 §9.3 (cross-ref)**: SchwabClient doble construcción (#1), market.iv_surface populating (#2 RESOLVED Sprint 7), market.ohlcv populating (#3 → ADR-007 candidate), _persisted_at field (#4), date-aware correlations (#5), SchwabClient.from_env() removal (#6), ATHENA prompt caveat (#7 RESOLVED S.6.iv-e), token TTL caching (#8), TOKEN_SCHWAB cleanup (#9), SkewSnapshot field naming (#10), Historical IV backfill (#11).
+
+ADR-005 §9.3 #2 (`market.iv_surface` populating) **CLOSED en Sprint 7** (S.7.surf-b/c). Operator doc §9 references both ADR-005 §9.3 (Sprint 6 inherited) and ADR-006 §9.3 (Sprint 7 new) canonical IDs.
+
+### 9.4 Next steps Sprint 8+
+
+ADR-006 §4 open questions + Sprint 8+ candidates:
+
+- **ADR-007 candidate** — `market.ohlcv` producer/consumer (tech debt ADR-005 §9.3 #3). HERMES historical data prerequisite. Sprint 8+ trigger when HERMES tactical agent design lands o intraday OHLCV needs emerge.
+- **Phase 2 consumer surface** (ADR-006 §4 first open question + D6 trigger). TickerSnapshot extension with TermStructureSnapshot field (30d/60d ATM IV slope) o full surface exposure. Decision factors: ATHENA proposal quality regressions sin surface data, APOLLO macro critique signal richness.
+- **D5 retention triggers** (ADR-006 §4 + D5). Monitor hypertable size + p99 query latency. Activate TimescaleDB native compression > 90d when triggers hit (5 GB OR p99 > 500ms). Sprint 9+ likely.
+- **NYX Sprint 8+ candidate** — masterdoc §10.7 NYX Integration postponed per ADR-006 D9. Sentiment data layer ADR materialization required. Trigger when AAII/NAAIM/COT/NLP titulares data sources scoped.
+- **Strike count tuning** (ADR-006 §4). Currently Schwab `strike_count=20` default. Sprint 8+ revisit si tail strikes (>3σ moves) provide value vs storage cost.
+- **F7 iv=0.0 vs None disambiguation** (tech debt #1 new). Decide Sprint 8+ if concrete data quality issue emerges.
+
+Sprint 7 iv_surface stage successfully closed. Foundation iv_surface accumulating forward (~1 año bootstrap per D9 consistency). Phase 2 consumer surface lands cuando concrete need surfaces.
 
 ---
 
-> **Próximo sub-bloque:** S.7.surf-b (IvSurfaceRepository + tests). Inicia tras Juan sign-off de este ADR.
+> **Sprint 7 iv_surface stage cerrado** (commits 15-16 mayo 2026). Próximo: Sprint 8+ planning — HERMES + ADR-007 ohlcv candidate o Phase 2 consumer surface decision.

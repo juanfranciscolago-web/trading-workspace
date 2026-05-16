@@ -434,16 +434,139 @@ SELECT * FROM timescaledb_information.chunks WHERE hypertable_name = 'iv_history
 
 ---
 
-## Section 8 — Future Work / Tech debt
+## Section 8 — iv_surface Lifecycle (Sprint 7 surface-stage onwards)
 
-Items canonical numbered per ADR-005 §9.3 (single source of truth — refer
-`docs/decisions/005-iv-history-and-iv-rank-compute.md` §9.3 for full
-descriptions; cross-references below are summaries):
+`market.iv_surface` accumulates per-contract IV + greeks + liquidity per
+snapshot, written alongside `iv_history` ATM scalar by `IvHistoryWorker`
+extension (S.7.surf-c). WRITE-only Sprint 7 per ADR-006 D6 — no consumer
+surface (TickerSnapshot extension) until Phase 2.
+
+### 8.1 Overview: per-snapshot accumulation + volume estimate
+
+Per ADR-006 D2 (full chain) + D4 (1-day chunks) + D9 (forward only):
+
+- **Snapshot trigger**: same 21:15 UTC daily como iv_history (D3 Worker extension).
+- **Volume per snapshot**: ~800-960 contracts/ticker × 6 tickers = ~5,400 rows/day.
+- **Volume per year**: ~1.5-1.8M rows. Within TimescaleDB capacity easily.
+- **Storage chunks**: 1-day chunks per V007 (high-volume vs iv_history 1-month).
+- **Bootstrap timeline**: forward accumulation per D9 — NO backfill. Day 0
+  iv_surface empty. Day N has N days × ~5,400 rows accumulated.
+
+Schwab chain `strike_count=20` default = ~40 strikes × ~10-12 expirations
+× 2 (call+put) per ticker. Real volume depends on liquid expirations per
+ticker (SPY denser than NVDA).
+
+### 8.2 D3-1 isolation contract
+
+iv_history (canonical, production-critical) + iv_surface (accumulating-for-future)
+write order per `IvHistoryWorker._snapshot_one_ticker`:
+
+1. `IvHistoryRepository.write_snapshot` — ALWAYS first (Sprint 6 canonical).
+2. `IvSurfaceRepository.write_chain_snapshot` — INSIDE try/except.
+3. Surface failure → WARNING log + continue (NOT raised).
+4. iv_history success NOT blocked by surface exceptions.
+
+Operator implications:
+
+- WARNING logs `"iv_surface write failed for X"` are **NOT critical** —
+  iv_rank compute (iv_history-based) unaffected.
+- ERROR-level alerts NOT triggered for surface failures.
+- ER pager / oncall NOT engaged for D3-1 isolation events.
+- Surface accumulating-for-future — missing N rows for 1 ticker on 1 day
+  is acceptable.
+
+If surface failure rate exceeds 10% across N days OR specific ticker
+fails consistently → investigate (likely Schwab chain shape drift or
+V007 schema mismatch).
+
+### 8.3 Monitoring: log signals at startup + runtime
+
+**Startup logs (lifespan):**
+
+- `✓ IvHistoryWorker active (snapshot 21:15 UTC daily)` — iv_history confirmed.
+- `✓ iv_surface populating enabled (per snapshot, D3-1 isolated)` — surface
+  populating confirmed. Missing → `iv_surface_repo` NOT wired (verify
+  lifespan + `USE_SCHWAB_DATA_LAYER=true`).
+
+**Runtime logs (per snapshot, per ticker):**
+
+- `DEBUG iv_surface wrote N rows for TICKER` — success (D-γ refinement
+  S.7.surf-c). Operational signal: N typically 800-960 per ticker.
+- `WARNING iv_surface write failed for TICKER, iv_history succeeded
+  (D3-1 isolation)` — surface failure isolated. Includes `exc_info=True`
+  stack trace for diagnostic.
+
+**Operator alert filtering**: grep `"D3-1 isolation"` to filter
+operationally-tolerable surface failures from critical errors.
+
+**Per-snapshot run aggregates** (same as Sprint 6 iv_history Worker
+logging): `INFO Starting IV snapshot run for ts=...` + `INFO IV snapshot
+run completed: N/6 tickers ok`.
+
+### 8.4 Troubleshooting: iv_surface NOT populating
+
+1. **`iv_surface_repo` None (expected `USE_SCHWAB_DATA_LAYER=False`)**: lifespan
+   construct conditional. No surface writes if flag False.
+2. **Surface write D3-1 isolation triggered repeatedly**: investigate
+   WARNING logs. Common causes:
+   - Schwab chain shape drift (column missing in contract dict).
+   - V007 schema mismatch (column type, NULL constraint).
+   - DB connection pool exhaustion (separate from iv_history pool).
+3. **executemany failure for entire ticker**: per-ticker isolation D-γ at
+   Worker level catches before D3-1 isolation. Worker continues other tickers.
+4. **iv NOT NULL violation skipping rows**: F7 guard `if not iv:` skips
+   contracts where iv falsy (None or 0). Expected; check Schwab returning
+   valid IV per contract.
+
+### 8.5 SQL monitoring queries
+
+Verificar iv_surface population:
+
+```sql
+-- Row count per ticker per day (last 7 days)
+SELECT underlying, ts::date AS day, COUNT(*) AS contracts
+FROM market.iv_surface
+WHERE ts > NOW() - INTERVAL '7 days'
+GROUP BY underlying, ts::date
+ORDER BY day DESC, underlying;
+
+-- Total rows + hypertable size (TimescaleDB public API)
+SELECT
+    'iv_surface' AS table_name,
+    pg_size_pretty(hypertable_size('market.iv_surface')) AS total_size,
+    (SELECT COUNT(*) FROM market.iv_surface) AS total_rows;
+
+-- Term structure snapshot for single ticker (today's surface)
+SELECT expiration, strike, option_type, iv, delta, volume
+FROM market.iv_surface
+WHERE underlying = 'SPY'
+  AND ts = (SELECT MAX(ts) FROM market.iv_surface WHERE underlying = 'SPY')
+ORDER BY expiration, strike, option_type;
+
+-- D5 retention trigger monitoring (ADR-006 §4)
+-- Trigger A: hypertable_size > 5 GB → activate compression chunks > 90 days
+-- Trigger B: monitor query p99 latency separately
+SELECT
+    pg_size_pretty(hypertable_size('market.iv_surface')) AS current_size,
+    (SELECT COUNT(*) FROM timescaledb_information.chunks
+     WHERE hypertable_name = 'iv_surface') AS chunk_count;
+```
+
+---
+
+## Section 9 — Future Work / Tech debt
+
+Items canonical numbered. Cross-reference sources:
+- ADR-005 §9.3 IDs #1-#11 (Sprint 6 tech debt, inherited).
+- ADR-006 §9.3 IDs (Sprint 7 tech debt, new).
+
+### ADR-005 §9.3 inherited items (Sprint 6+)
 
 - **#1 SchwabClient doble construcción** — Sprint 7+ refactor candidate.
   Lifespan + worker each call `SchwabClient.from_gcp()` independently.
-- **#2 `market.iv_surface` populating** — **ADR-006 candidate** Sprint 7+.
-  Hypertable EXISTS desde V007 unwritten.
+- **#2 `market.iv_surface` populating** — **✓ RESOLVED Sprint 7** (commits
+  `de82465` ADR-006 plan + `84ab8c3` Repository + `7ac1ee5` Worker extension).
+  See ADR-006 §9.1 sub-blocks delivered.
 - **#3 `market.ohlcv` populating** — **ADR-007 candidate** HERMES prerequisite.
 - **#4 `_persisted_at` field**: cleaner Schwab Firestore token expiry tracking.
 - **#5 Date-aware correlations alignment**: required if VIX or cross-exchange
@@ -460,6 +583,20 @@ descriptions; cross-references below are summaries):
   change Sprint 7+ (serialized state migration required).
 - **#11 Historical IV backfill**: D9 firm "NEVER" Phase 1; Sprint 8+ open
   question, paid CBOE feed evaluation if priorities shift.
+
+### ADR-006 §9.3 NEW items (Sprint 7)
+
+1. **F7 iv=0.0 vs iv=None disambiguation** — `IvSurfaceRepository` skips both
+   via `if not iv:`. Future Sprint may distinguish missing data vs legit
+   zero IV (deep OTM theoretical).
+2. **executemany pattern canonical convention** — NEW Sprint 7 pattern.
+   Document Sprint 8+ as canonical for high-volume Repository INSERTs.
+3. **D-α-3 MagicMock plain (no spec=IvSurfaceRepository)** — Tests use
+   plain MagicMock. API drift not auto-caught. Trade-off accepted.
+4. **Test 5 positional args check vs kwargs** — Intentional drift catch
+   via `call_args[0]` positional verification.
+5. **D6-1 ATHENA prompt drift** — Prompt mentions term structure/vol
+   surface but TickerSnapshot NOT exposes. Phase 2 reconciliation.
 
 **Previously listed (S.5.6g) — now resolved:**
 
