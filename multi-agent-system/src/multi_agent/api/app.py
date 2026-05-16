@@ -25,6 +25,7 @@ from multi_agent.data_layer.interfaces import DataLayer
 
 if TYPE_CHECKING:
     from multi_agent.persistence.iv_history_repository import IvHistoryRepository
+    from multi_agent.persistence.iv_surface_repository import IvSurfaceRepository
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,7 @@ async def _lifespan(app: FastAPI):
     from multi_agent.alerts.worker import AlertWorker
     from multi_agent.data_layer import SchwabDataLayer
     from multi_agent.persistence.iv_history_repository import IvHistoryRepository
+    from multi_agent.persistence.iv_surface_repository import IvSurfaceRepository
     from multi_agent.workers.iv_history_worker import IvHistoryWorker
     from shared_core.brokers.schwab_client import SchwabClient
 
@@ -159,9 +161,15 @@ async def _lifespan(app: FastAPI):
     # When False (StubDataLayer path), keep None — SchwabDataLayer fallback
     # path also accepts None per ADR-005 D5 (S.6.iv-d).
     iv_history_repo: IvHistoryRepository | None = None
+    # iv_surface_repo: parallel construct for S.7.surf-c. Consumed by
+    # IvHistoryWorker only (D6 WRITE-only Sprint 7; SchwabDataLayer does
+    # NOT read iv_surface until Phase 2 consumer surface sub-block).
+    iv_surface_repo: IvSurfaceRepository | None = None
     if settings.USE_SCHWAB_DATA_LAYER:
         iv_history_repo = IvHistoryRepository(pool)
+        iv_surface_repo = IvSurfaceRepository(pool)
     app.state.iv_history_repo = iv_history_repo
+    app.state.iv_surface_repo = iv_surface_repo
 
     # ATHENA real agent dependencies (Sprint 3 B.3.5).
     # Config path: env override + project-root fallback (mirrors risk/config.py).
@@ -265,10 +273,15 @@ async def _lifespan(app: FastAPI):
         iv_worker = IvHistoryWorker(
             repo=app.state.iv_history_repo,
             schwab_client=iv_schwab_client,
+            surface_repo=app.state.iv_surface_repo,
         )
         iv_task = asyncio.create_task(iv_worker.run())
         app.state.iv_worker = iv_worker
         logger.info("✓ IvHistoryWorker active (snapshot 21:15 UTC daily)")
+        if app.state.iv_surface_repo is not None:
+            logger.info(
+                "✓ iv_surface populating enabled (per snapshot, D3-1 isolated)"
+            )
 
     # Telegram bot — inbound command polling.
     # Pool injected via bot_data so handlers share the same pool as the API

@@ -10,6 +10,7 @@ asyncio_mode = "auto" en pyproject — async def tests run sin
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import date, datetime, timezone
 from unittest.mock import MagicMock
 
@@ -45,11 +46,14 @@ def _make_worker(
     *,
     chain_response: dict | None = None,
     has_snapshot: bool = False,
+    surface_repo: MagicMock | None = None,
     poll_interval_s: float = 0.05,
-) -> tuple[IvHistoryWorker, MagicMock, MagicMock]:
+) -> tuple[IvHistoryWorker, MagicMock, MagicMock, MagicMock | None]:
     """Build IvHistoryWorker with mock repo + schwab_client.
 
-    Returns (worker, mock_repo, mock_client) for tests to configure.
+    Returns (worker, mock_repo, mock_client, mock_surface_repo) for tests
+    to configure. surface_repo defaults to None (Optional per ADR-006 D-α);
+    tests verifying D3-1 isolation pass MagicMock() explicitly.
     Defaults: chain has SPY-shaped fixture, has_snapshot=False.
     """
     mock_repo = MagicMock()
@@ -63,9 +67,10 @@ def _make_worker(
     worker = IvHistoryWorker(
         repo=mock_repo,
         schwab_client=mock_client,
+        surface_repo=surface_repo,
         poll_interval_s=poll_interval_s,
     )
-    return worker, mock_repo, mock_client
+    return worker, mock_repo, mock_client, surface_repo
 
 
 def _make_datetime_mock(fake_now: datetime):
@@ -135,7 +140,7 @@ class TestShouldSnapshotNow:
     def test_returns_false_on_saturday(self, monkeypatch):
         # 2026-05-16 is a Saturday
         fake_now = datetime(2026, 5, 16, 22, 0, tzinfo=timezone.utc)
-        worker, _, _ = _make_worker()
+        worker, _, _, _ = _make_worker()
         monkeypatch.setattr(
             "multi_agent.workers.iv_history_worker.datetime",
             _make_datetime_mock(fake_now),
@@ -144,7 +149,7 @@ class TestShouldSnapshotNow:
 
     def test_returns_false_on_sunday(self, monkeypatch):
         fake_now = datetime(2026, 5, 17, 22, 0, tzinfo=timezone.utc)
-        worker, _, _ = _make_worker()
+        worker, _, _, _ = _make_worker()
         monkeypatch.setattr(
             "multi_agent.workers.iv_history_worker.datetime",
             _make_datetime_mock(fake_now),
@@ -154,7 +159,7 @@ class TestShouldSnapshotNow:
     def test_returns_false_before_21_15_utc(self, monkeypatch):
         # Thursday 20:00 UTC (before snapshot time)
         fake_now = datetime(2026, 5, 14, 20, 0, tzinfo=timezone.utc)
-        worker, _, _ = _make_worker()
+        worker, _, _, _ = _make_worker()
         monkeypatch.setattr(
             "multi_agent.workers.iv_history_worker.datetime",
             _make_datetime_mock(fake_now),
@@ -164,7 +169,7 @@ class TestShouldSnapshotNow:
     def test_returns_true_after_21_15_no_snapshot_today(self, monkeypatch):
         # Thursday 22:00 UTC, canary SPY not yet snapshotted
         fake_now = datetime(2026, 5, 14, 22, 0, tzinfo=timezone.utc)
-        worker, repo, _ = _make_worker(has_snapshot=False)
+        worker, repo, _, _ = _make_worker(has_snapshot=False)
         monkeypatch.setattr(
             "multi_agent.workers.iv_history_worker.datetime",
             _make_datetime_mock(fake_now),
@@ -174,7 +179,7 @@ class TestShouldSnapshotNow:
 
     def test_returns_false_when_canary_already_snapshotted(self, monkeypatch):
         fake_now = datetime(2026, 5, 14, 22, 0, tzinfo=timezone.utc)
-        worker, _, _ = _make_worker(has_snapshot=True)
+        worker, _, _, _ = _make_worker(has_snapshot=True)
         monkeypatch.setattr(
             "multi_agent.workers.iv_history_worker.datetime",
             _make_datetime_mock(fake_now),
@@ -188,7 +193,7 @@ class TestSnapshotOneTicker:
     """_snapshot_one_ticker — single-ticker fetch + persist flow."""
 
     def test_writes_snapshot_when_chain_valid(self):
-        worker, repo, client = _make_worker()
+        worker, repo, client, _ = _make_worker()
         ts = datetime(2026, 5, 14, 21, 15, tzinfo=timezone.utc)
 
         worker._snapshot_one_ticker("SPY", ts)
@@ -203,7 +208,7 @@ class TestSnapshotOneTicker:
 
     def test_skips_when_chain_empty(self):
         empty_chain = {"expirations": [], "spot": {"last": 0.0}}
-        worker, repo, _ = _make_worker(chain_response=empty_chain)
+        worker, repo, _, _ = _make_worker(chain_response=empty_chain)
         ts = datetime(2026, 5, 14, 21, 15, tzinfo=timezone.utc)
 
         worker._snapshot_one_ticker("SPY", ts)
@@ -217,12 +222,101 @@ class TestSnapshotOneTicker:
             "calls": {"2026-06-19": {"450.0": {"iv": 0.0}}},
             "puts": {"2026-06-19": {"450.0": {"iv": 0.0}}},
         }
-        worker, repo, _ = _make_worker(chain_response=zero_chain)
+        worker, repo, _, _ = _make_worker(chain_response=zero_chain)
         ts = datetime(2026, 5, 14, 21, 15, tzinfo=timezone.utc)
 
         worker._snapshot_one_ticker("SPY", ts)
 
         repo.write_snapshot.assert_not_called()
+
+
+# ── TestSurfaceExtension ─────────────────────────────────────────────────────
+
+class TestSurfaceExtension:
+    """surface_repo extension on _snapshot_one_ticker — ADR-006 S.7.surf-c.
+
+    Validates D3-1 isolation contract: iv_surface write failure NOT blocking
+    iv_history write success. caplog pattern mirrors S.6.iv-d TestIvRankProgressive.
+    """
+
+    _LOGGER_NAME = "multi_agent.workers.iv_history_worker"
+
+    def test_calls_surface_repo_write_chain_after_iv_history(self):
+        """Happy path: surface_repo.write_chain_snapshot called after iv_history write."""
+        mock_surface = MagicMock()
+        mock_surface.write_chain_snapshot.return_value = 12  # 12 rows inserted
+        worker, mock_repo, _, _ = _make_worker(surface_repo=mock_surface)
+        ts = datetime(2026, 5, 16, 21, 15, tzinfo=timezone.utc)
+
+        worker._snapshot_one_ticker("SPY", ts)
+
+        # iv_history write happened
+        mock_repo.write_snapshot.assert_called_once()
+        # iv_surface write happened
+        mock_surface.write_chain_snapshot.assert_called_once()
+
+    def test_surface_repo_none_does_not_call_surface_write(self):
+        """D-α: surface_repo=None default → skip surface call entirely."""
+        worker, mock_repo, _, surface_repo = _make_worker(surface_repo=None)
+        ts = datetime(2026, 5, 16, 21, 15, tzinfo=timezone.utc)
+
+        worker._snapshot_one_ticker("SPY", ts)
+
+        # iv_history still writes
+        mock_repo.write_snapshot.assert_called_once()
+        # surface_repo is None → no call possible
+        assert surface_repo is None
+
+    def test_surface_write_failure_does_not_block_iv_history_success(self):
+        """D3-1: surface raises → iv_history write still succeeds, no re-raise."""
+        mock_surface = MagicMock()
+        mock_surface.write_chain_snapshot.side_effect = RuntimeError("DB connection lost")
+        worker, mock_repo, _, _ = _make_worker(surface_repo=mock_surface)
+        ts = datetime(2026, 5, 16, 21, 15, tzinfo=timezone.utc)
+
+        # Should NOT raise — surface failure isolated
+        worker._snapshot_one_ticker("SPY", ts)
+
+        # iv_history write still happened (BEFORE surface attempt)
+        mock_repo.write_snapshot.assert_called_once()
+        # surface attempt was made
+        mock_surface.write_chain_snapshot.assert_called_once()
+
+    def test_surface_failure_logs_warning_with_exc_info(self, caplog):
+        """D-δ: failure logs WARNING with 'D3-1 isolation' marker + exc_info."""
+        mock_surface = MagicMock()
+        mock_surface.write_chain_snapshot.side_effect = RuntimeError("simulated DB error")
+        worker, _, _, _ = _make_worker(surface_repo=mock_surface)
+        ts = datetime(2026, 5, 16, 21, 15, tzinfo=timezone.utc)
+
+        with caplog.at_level(logging.WARNING, logger=self._LOGGER_NAME):
+            worker._snapshot_one_ticker("SPY", ts)
+
+        warnings = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == self._LOGGER_NAME
+        ]
+        assert any(
+            "iv_surface write failed" in r.message and "D3-1 isolation" in r.message
+            for r in warnings
+        )
+        assert any(r.exc_info is not None for r in warnings)
+
+    def test_surface_called_with_correct_chain_ticker_ts(self):
+        """Args validation: write_chain_snapshot(chain, ticker, ts) — positional."""
+        mock_surface = MagicMock()
+        mock_surface.write_chain_snapshot.return_value = 5
+        worker, _, _, _ = _make_worker(surface_repo=mock_surface)
+        ts = datetime(2026, 5, 16, 21, 15, tzinfo=timezone.utc)
+
+        worker._snapshot_one_ticker("SPY", ts)
+
+        # Verify positional args (chain, ticker, ts)
+        call_args = mock_surface.write_chain_snapshot.call_args
+        chain_arg, ticker_arg, ts_arg = call_args[0]  # positional
+        assert chain_arg == _SAMPLE_CHAIN  # default fixture
+        assert ticker_arg == "SPY"
+        assert ts_arg == ts
 
 
 # ── TestSnapshotAllTickers ───────────────────────────────────────────────────
@@ -232,7 +326,7 @@ class TestSnapshotAllTickers:
 
     async def test_per_ticker_failure_does_not_block_others(self):
         # Mock get_options_chain to raise for "NVDA" only; succeed for others.
-        worker, repo, client = _make_worker()
+        worker, repo, client, _ = _make_worker()
 
         def _chain_side_effect(ticker):
             if ticker == "NVDA":
@@ -256,7 +350,7 @@ class TestRunLifecycle:
     """run() + shutdown() async lifecycle."""
 
     async def test_shutdown_stops_loop(self):
-        worker, _, _ = _make_worker(poll_interval_s=10.0)
+        worker, _, _, _ = _make_worker(poll_interval_s=10.0)
 
         async def _stop():
             await asyncio.sleep(0.05)
@@ -271,7 +365,7 @@ class TestRunLifecycle:
     async def test_predicate_false_does_not_snapshot(self, monkeypatch):
         # Saturday → predicate False, snapshot never invoked.
         fake_now = datetime(2026, 5, 16, 22, 0, tzinfo=timezone.utc)
-        worker, repo, client = _make_worker(poll_interval_s=10.0)
+        worker, repo, client, _ = _make_worker(poll_interval_s=10.0)
         monkeypatch.setattr(
             "multi_agent.workers.iv_history_worker.datetime",
             _make_datetime_mock(fake_now),

@@ -14,6 +14,12 @@ ADR-005 references:
   empty chain → log warning + skip.
 - D-γ: Per-ticker error isolation (1 ticker fail does NOT crash worker).
 - D-θ: Predicate-based should_snapshot_now (idempotent via DB ON CONFLICT).
+
+ADR-006 references (S.7.surf-c):
+- D3: Worker extension — write iv_surface alongside iv_history per snapshot.
+- D3-1: Surface write failure isolation — try/except around surface call;
+  iv_history success NOT blocked by surface exceptions.
+- D6: WRITE only Sprint 7 (no read methods on IvSurfaceRepository).
 """
 from __future__ import annotations
 
@@ -24,6 +30,7 @@ from datetime import datetime, timezone
 from multi_agent.data_layer.universe import TICKER_UNIVERSE
 from multi_agent.data_layer.iv_compute import compute_atm_iv
 from multi_agent.persistence.iv_history_repository import IvHistoryRepository
+from multi_agent.persistence.iv_surface_repository import IvSurfaceRepository
 from shared_core.brokers.schwab_client import SchwabClient
 
 logger = logging.getLogger(__name__)
@@ -47,10 +54,12 @@ class IvHistoryWorker:
         self,
         repo: IvHistoryRepository,
         schwab_client: SchwabClient,
+        surface_repo: IvSurfaceRepository | None = None,
         poll_interval_s: float | None = None,
     ) -> None:
         self._repo = repo
         self._client = schwab_client
+        self._surface_repo = surface_repo
         self._poll_interval = poll_interval_s or self.POLL_INTERVAL_S
         self._stop_event = asyncio.Event()
 
@@ -171,6 +180,23 @@ class IvHistoryWorker:
             atm_iv=atm_iv,
             underlying_close=spot if spot > 0 else None,
         )
+
+        # ADR-006 D3-1: surface write isolated — iv_history success must NOT
+        # be blocked by surface exceptions (DB error, schema mismatch, etc.).
+        if self._surface_repo is not None:
+            try:
+                rows_inserted = self._surface_repo.write_chain_snapshot(
+                    chain, ticker, snapshot_ts
+                )
+                logger.debug(
+                    "iv_surface wrote %d rows for %s", rows_inserted, ticker
+                )
+            except Exception:
+                logger.warning(
+                    "iv_surface write failed for %s, iv_history succeeded (D3-1 isolation)",
+                    ticker,
+                    exc_info=True,
+                )
 
     def _compute_snapshot_ts(self) -> datetime:
         """Fixed ts at 21:15:00 UTC sharp today (Q4 idempotency)."""
