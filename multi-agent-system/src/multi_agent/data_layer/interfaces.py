@@ -14,7 +14,7 @@ LLM user prompt.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
 
@@ -67,6 +67,31 @@ class TickerSnapshot:
     skew: SkewSnapshot
     realized_vol_30d: float       # decimal (0.18 = 18%)
 
+    # ── Phase 2 consumer surface fields (Sprint 10 S.10.cons-c, ADR-009 D2) ───
+    term_structure: list[tuple[int, float]] = field(default_factory=list)
+    """Term structure ordered front-to-back: list[(dte, atm_iv_proxy)].
+
+    Source: IvSurfaceRepository.get_term_structure (S.10.cons-b).
+    Phase 1 proxy: weighted AVG(iv * open_interest) per expiration (D3-1).
+    Empty list default — backward compat with existing TickerSnapshot constructors.
+    """
+
+    surface: dict[int, list[float]] = field(default_factory=dict)
+    """Delta-sampled surface: dict[delta_bucket → list[iv_per_expiration]].
+
+    Source: IvSurfaceRepository.get_surface_for_ticker + delta bucketing
+    (SchwabDataLayer S.10.cons-d processing). Delta buckets: 25, 50, 75.
+    Empty dict default — backward compat.
+    """
+
+    ohlcv_intraday: dict[str, list[OHLCV]] = field(default_factory=dict)
+    """Intraday OHLCV per timeframe: dict[timeframe → list[OHLCV]].
+
+    Source: OhlcvRepository.get_bars per timeframe (SchwabDataLayer S.10.cons-d).
+    Timeframes: "5m", "15m", "30m", "1d" (per ADR-007 D2 + ADR-009 D2-3).
+    Empty dict default — backward compat.
+    """
+
 
 @dataclass(frozen=True)
 class MarketState:
@@ -96,6 +121,25 @@ class MarketState:
                 bar["timestamp"] = bar["timestamp"].isoformat()
             for bar in ticker_data["ohlcv_hourly"]:
                 bar["timestamp"] = bar["timestamp"].isoformat()
+
+            # NEW Sprint 10 (S.10.cons-c) — Phase 2 consumer surface serialization:
+            # F-r3: ohlcv_intraday is dict[str, list[OHLCV]] — iterate timeframes,
+            # then bars within each timeframe.
+            for timeframe_bars in ticker_data["ohlcv_intraday"].values():
+                for bar in timeframe_bars:
+                    bar["timestamp"] = bar["timestamp"].isoformat()
+
+            # F-r2: asdict() preserves tuples, JSON requires lists. Convert
+            # term_structure tuples → lists.
+            ticker_data["term_structure"] = [
+                list(t) for t in ticker_data["term_structure"]
+            ]
+
+            # F-r4: JSON object keys must be strings. surface uses int keys
+            # (delta buckets 25/50/75) — convert to str for JSON compat.
+            ticker_data["surface"] = {
+                str(k): v for k, v in ticker_data["surface"].items()
+            }
         d["correlations"] = {
             f"{a}_{b}": v for (a, b), v in self.correlations.items()
         }
