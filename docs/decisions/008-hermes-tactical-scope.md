@@ -57,11 +57,11 @@ Mapping 8 HERMES data sources (masterdoc §3.3) → tiers:
 |---|---|---|---|
 | L2 / Order book real-time | D | 1 | Schwab WebSocket (NEW port) |
 | Tape / volumen agresor | D | 1 | Schwab WebSocket |
-| Unusual options activity | C/D | 1 | Detection logic over chain snapshots (intraday) |
+| Unusual options activity | C | 1 | Detection logic over chain snapshots (Tier C primary path; Tier D streaming variant deferred per D1-1) |
 | Dark pool prints intraday | E | 2 | Third-party vendor (Sprint 16+) |
 | GEX/vanna/charm flows | A | 1 | Compute from iv_surface (S.7.surf-b ready) |
 | VIX intraday, VVIX | C | 1 | Schwab REST quotes (intraday) |
-| Volume profile intraday | A/C | 1 | Compute from intraday OHLCV (Tier C bars + Tier A aggregation) |
+| Volume profile intraday | A | 1 | Tier A compute aggregation; depends on Tier C intraday OHLCV input (dependency chain, NOT dual-tier classification) |
 | News real-time | E | 2 | Third-party vendor (Sprint 16+) |
 
 **Phase 1 covers 6 of 8 sources. Phase 2 covers remaining 2 (dark pool + news).**
@@ -72,6 +72,21 @@ Mapping 8 HERMES data sources (masterdoc §3.3) → tiers:
 | B | All 8 sources Phase 1 | Massive scope, Sprint 20+ timeline. Postpones paper trading discipline. |
 | C | Only Tiers A+B Phase 1 (compute + daily) | Insufficient tactical edge. HERMES masterdoc §3.3 time horizon "minutos a horas" requires Tier C minimum. |
 
+#### D1-1. Sub-decision: Unusual options activity Phase 1 tier path
+
+**Decisión:** Phase 1 implementation **Tier C only** (Schwab REST chain snapshots polled intraday 5m/15m). Tier D real-time streaming variant (WebSocket sweeps/blocks) deferred a ADR-011 (HERMES implementation tuning).
+
+Razón:
+- Phase 1 boundary clarity. Sprint 9-11 work focused en Tier C foundation (ohlcv via ADR-007) + Tier D infra generic (WebSocket via ADR-009). Unusual options DETECTION layer es ADR-011-specific work.
+- Tier C path (chain snapshots polled 5m/15m) adequate para tactical setups con 4-hour windows (HERMES masterdoc §3.3 voz típica example).
+- Dual-path Phase 1 doubles Sprint 9-11 complexity sin gain proporcional pre-empirical data.
+
+| Opción | Descripción | Descartada porque |
+|---|---|---|
+| **A (this)** | Tier C only Phase 1 | Slower detection acceptable; Phase 1 boundary clean; deferred tuning ADR-011. |
+| B | Tier C+D dual Phase 1 | Doubles Sprint 9-11 complexity, low marginal value pre-empirical. |
+| C | Defer ADR-011 entirely | Loses scope clarity Phase 1 boundary. |
+
 ### D2. HERMES rol consensus chain — critic primario, proposer secundario condicional
 
 **Decisión:** HERMES integrates en debate chain como:
@@ -80,6 +95,17 @@ Mapping 8 HERMES data sources (masterdoc §3.3) → tiers:
 
 Razón: HERMES intraday time horizon doesn't always align con ATHENA 15-45 días / APOLLO weeks-months. Most days HERMES has no tactical setup. Critic role provides value every cycle; proposer role episodic.
 
+#### D2-1. Sub-decision: Proposer trigger threshold (defer ADR-011, gated Q5)
+
+**Decisión:** HERMES proposer "tactical signal strong" threshold **deferred a ADR-011** (HERMES implementation tuning), **gated por Q5** (Phase 1 ROI threshold).
+
+Razón:
+- Pre-commit threshold over-fit risk pre-empirical data. Signal distributions Tier A+B+C+D require Sprint 13-15 paper trading validation antes de calibration.
+- ADR-008 = scope ADR. Threshold tuning = implementation concern.
+- Q5 (Phase 1 ROI threshold) provides empirical gating — once ROI metric established post-paper-trading, threshold tuning informed by real signal distributions.
+
+Placeholder en ADR-011: threshold structure TBD (multi-signal AND gate, single high-conviction, LLM judgment-based, hybrid). NO pre-commitment aquí.
+
 ### D3. Time horizon operacional — intraday (5m-60m bars + WebSocket events)
 
 **Decisión:** HERMES operational granularity:
@@ -87,14 +113,43 @@ Razón: HERMES intraday time horizon doesn't always align con ATHENA 15-45 días
 - **WebSocket events** (Tier D) para tactical setups en real-time (L2 imbalance, tape acceleration).
 - **Daily snapshot** (Tier B) para context (gap from prior close, overnight news catch-up).
 
-Cycle cadence: HERMES proposer evaluates intraday on-demand (event-driven). Critic evaluates con normal debate cycle.
+Cycle cadence: HERMES proposer evaluates intraday on-demand (event-driven). Critic evaluates con normal debate cycle. **Ambiguity preserved Q4 (§4)** — dual execution modes (streaming proposer + batch critic) architectural impact deferred a ADR-011.
 
 ### D4. Output schema — ProposalMessage + CritiqueMessage extended
 
 **Decisión:**
-- HERMES proposer output: `ProposalMessage` shape (same as ATHENA) con `time_horizon_days` field overloaded para fractional days (e.g., `0.5` = 12 hours).
+- HERMES proposer output: `ProposalMessage` shape (same as ATHENA) con **canonical `time_horizon_seconds: int` field** (replaces `time_horizon_days`). ATHENA emits `1_296_000` (15d × 86,400), HERMES emits `14_400` (240m × 60). Schema migration scope ADR-011 (see D4-1).
 - HERMES critic output: `CritiqueMessage` shape extended con field `tactical_flag_raised: bool` (similar to `contrarian_flag_raised` APOLLO).
 - ClaudeRouter `task_type`: NEW `tactical_proposal` (proposer) + NEW `tactical_critique` (critic). Both Sonnet 4.6 default (per LLM delegation §8.6).
+
+#### D4-1. Sub-decision: time_horizon_seconds canonical unification (schema migration scope ADR-011)
+
+**Decisión:** ProposalMessage schema unification — single canonical field `time_horizon_seconds: int` replaces current `time_horizon_days: int`. Both ATHENA and HERMES emit en seconds.
+
+- ATHENA: 15-45 días → `1_296_000` to `3_888_000` seconds.
+- HERMES: 5-720 minutes → `300` to `43_200` seconds.
+
+Migration V0XX (ADR-011 scope): `ADD COLUMN time_horizon_seconds INTEGER`, backfill from `time_horizon_days × 86_400`, deprecate `time_horizon_days`. Pydantic v2 schema validators updated. ATHENA prompt + agent updated to emit seconds. ATLAS validation reads seconds.
+
+Razón vs alternatives:
+- **Float days** (e.g., `0.5` = 12h): semantic ambiguity (decimal precision loss, locale-dependent display).
+- **Additive `time_horizon_minutes`**: either-or anti-pattern Pydantic v2 (multiple fields conditional populate).
+- **Canonical seconds**: single validators, simpler ATLAS validation, cleaner DB column, future-proof for sub-minute horizons (0DTE Tier D streaming setups).
+
+Trade-off acknowledged: less human-readable JSON dumps. Mitigation: dashboard formatter (`format_horizon(seconds) → "15d 6h"`) + log helpers.
+
+#### D4-2. Sub-decision: HERMES dual-output proposer + critic concurrent emission
+
+**Decisión:** Cuando HERMES tactical setup triggered AND debate cycle requesting critique para existing ATHENA/APOLLO proposal, HERMES emit **both outputs en parallel**:
+- `ProposalMessage` con new `correlation_id` (HERMES tactical setup, parent_message_id = None or trigger event).
+- `CritiqueMessage` con existing `correlation_id` (HERMES critique para current cycle proposal, parent_message_id = proposal.message_id).
+
+Razón:
+- Debate chain Sprint 4 design supports multiple `parent_message_id` semantics (per ADR-003 D5 consensus engine).
+- Tactical opportunities time-sensitive — sequential delay loses signal value (minutes-hours window).
+- ATLAS validates each output independently — no debate conflict (separate correlation_ids).
+
+Implementation tuning (single LLM call con dual-output prompt vs dual-call serial, prompt structure) deferred a ADR-011.
 
 ### D5. Data layer requirements per tier
 
@@ -129,7 +184,7 @@ Cycle cadence: HERMES proposer evaluates intraday on-demand (event-driven). Crit
 **Decisión:** Phase 1 implementation requires sequenced ADRs:
 
 1. **ADR-007** (market.ohlcv producer/consumer) — Sprint 9. Tier C intraday bars + Tier A volume profile foundation.
-2. **ADR-009** (Schwab WebSocket port) — Sprint 11+. Tier D real-time L2/tape.
+2. **ADR-009** (Schwab WebSocket port) — Sprint 11-12 (multi-sprint sub-blocks pattern: part 1 infra Sprint 11 + part 2 completion Sprint 12 per D7). Tier D real-time L2/tape.
 3. **ADR-010** (GEX compute pipeline) — Sprint 12+. Tier A dealer flows.
 4. **ADR-011** (HERMES implementation) — Sprint 13-14+. Integrates Tiers A+B+C+D + prompt + agent class + debate chain.
 
@@ -140,10 +195,10 @@ Each downstream ADR follows ADR-005/006 pattern.
 **Decisión:** HERMES build-out spans ~6 sprints (9-14) with incremental tier delivery:
 
 - Sprint 9: Tier C foundation (ohlcv intraday via ADR-007).
-- Sprint 10: Phase 2 consumer surface (ATHENA quality + Tier A base for HERMES later).
+- Sprint 10: Phase 2 consumer surface (ATHENA quality unlock + Tier A **consumer pattern foundation, NOT HERMES Tier A compute** which is Sprint 12+ per D5).
 - Sprint 11: Tier D infra (WebSocket via ADR-009 part 1).
 - Sprint 12: Tier A compute pipeline (GEX via ADR-010) + WebSocket completion (ADR-009 part 2).
-- Sprint 13-14: HERMES agent class + prompt + debate integration (ADR-011).
+- Sprint 13-16+: HERMES agent class + prompt + debate integration (ADR-011), aligned con S.8.plan-a memo timeline (MVP delivery Sprint 13-14 + stabilization/observation Sprint 15-16+).
 
 Incremental delivery permits paper trading durante build-out (foundation building era).
 
@@ -161,12 +216,12 @@ Trigger Phase 2 (Sprint 16+):
 
 ### D9. Open questions list (preserve para Phase 2 trigger decisions)
 
-**Decisión:** Phase 2 decisions deferred a empirical Phase 1 data:
-- Vendor selection (dark pool source, news source).
-- Latency tolerance Tier E feeds.
-- HERMES Phase 2 prompt extension.
+**Decisión:** Phase 2 trigger decisions **NOT pre-committed** en este ADR. Deferred a empirical Phase 1 data + explicit triggers:
+- Vendor selection (dark pool source, news source) — gated por Q5 Phase 1 ROI threshold.
+- Latency tolerance Tier E feeds — gated por Phase 1 actual measured latency baseline.
+- HERMES Phase 2 prompt extension — gated por Phase 1 prompt observed performance.
 
-§4 Open Questions enumera Q1-Q7 con triggers.
+**Defer doctrine** (Phase 2): positive ROI required pre-vendor cost, NO speculation. §4 Open Questions enumera Q1-Q7 con triggers.
 
 ---
 
