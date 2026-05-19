@@ -232,3 +232,188 @@ class TestWriteChainSnapshot:
         assert result == 0
         cursor.executemany.assert_not_called()
         pool.cursor.assert_not_called()  # Pool not even entered.
+
+
+# ── READ methods tests (Phase 2 consumer surface, S.10.cons-b ADR-009 D3) ─────
+
+
+class TestGetSurfaceForTicker:
+    """get_surface_for_ticker() — returns ordered list[dict] full surface rows."""
+
+    def test_returns_full_rows(self):
+        pool, cursor = _make_pool_and_cursor()
+        cursor.fetchall.return_value = [
+            (date(2026, 6, 19), 450.0, "CALL", 0.20, 0.50, 0.05, -0.04, 0.12, 8000, 1500),
+            (date(2026, 6, 19), 450.0, "PUT",  0.21, -0.50, 0.05, -0.04, 0.12, 6000, 1200),
+            (date(2026, 7, 17), 455.0, "CALL", 0.22, 0.30, 0.04, -0.03, 0.10, 4000, 800),
+        ]
+        repo = IvSurfaceRepository(pool)
+
+        result = repo.get_surface_for_ticker("SPY", _TS)
+
+        assert len(result) == 3
+        assert result[0]["expiration"] == date(2026, 6, 19)
+        assert result[0]["strike"] == 450.0
+        assert result[0]["option_type"] == "CALL"
+        assert result[0]["iv"] == 0.20
+        assert result[0]["open_interest"] == 8000
+        assert result[0]["volume"] == 1500
+        # Verify all 10 expected keys present
+        expected_keys = {"expiration", "strike", "option_type", "iv", "delta",
+                        "gamma", "theta", "vega", "open_interest", "volume"}
+        assert set(result[0].keys()) == expected_keys
+
+    def test_orders_by_exp_strike_type(self):
+        pool, cursor = _make_pool_and_cursor()
+        cursor.fetchall.return_value = []
+        repo = IvSurfaceRepository(pool)
+
+        repo.get_surface_for_ticker("SPY", _TS)
+
+        sql, _ = cursor.execute.call_args[0]
+        assert "ORDER BY expiration ASC, strike ASC, option_type ASC" in sql
+
+    def test_filters_by_ticker_and_ts(self):
+        pool, cursor = _make_pool_and_cursor()
+        cursor.fetchall.return_value = []
+        repo = IvSurfaceRepository(pool)
+
+        repo.get_surface_for_ticker("QQQ", _TS)
+
+        sql, params = cursor.execute.call_args[0]
+        assert "WHERE underlying = %s AND ts = %s" in sql
+        assert params == ("QQQ", _TS)
+
+    def test_empty_result(self):
+        pool, cursor = _make_pool_and_cursor()
+        cursor.fetchall.return_value = []
+        repo = IvSurfaceRepository(pool)
+
+        result = repo.get_surface_for_ticker("UNKNOWN", _TS)
+
+        assert result == []
+
+    def test_raises_on_naive_ts(self):
+        pool, _ = _make_pool_and_cursor()
+        repo = IvSurfaceRepository(pool)
+        naive_ts = datetime(2026, 5, 16, 21, 15)  # NO tzinfo
+
+        with pytest.raises(ValueError, match="tz-aware"):
+            repo.get_surface_for_ticker("SPY", naive_ts)
+
+        pool.cursor.assert_not_called()
+
+
+class TestGetTermStructure:
+    """get_term_structure() — weighted AVG(iv * OI) proxy per expiration."""
+
+    def test_returns_dte_iv_tuples(self):
+        pool, cursor = _make_pool_and_cursor()
+        # ts = 2026-05-16 → dte for 2026-06-19 = 34, for 2026-07-17 = 62
+        cursor.fetchall.return_value = [
+            (date(2026, 6, 19), 0.205),
+            (date(2026, 7, 17), 0.225),
+        ]
+        repo = IvSurfaceRepository(pool)
+
+        result = repo.get_term_structure("SPY", _TS)
+
+        assert len(result) == 2
+        assert result[0] == (34, 0.205)
+        assert result[1] == (62, 0.225)
+
+    def test_orders_by_expiration_ascending(self):
+        pool, cursor = _make_pool_and_cursor()
+        cursor.fetchall.return_value = []
+        repo = IvSurfaceRepository(pool)
+
+        repo.get_term_structure("SPY", _TS)
+
+        sql, _ = cursor.execute.call_args[0]
+        assert "ORDER BY expiration ASC" in sql
+
+    def test_uses_weighted_avg_with_coalesce(self):
+        pool, cursor = _make_pool_and_cursor()
+        cursor.fetchall.return_value = []
+        repo = IvSurfaceRepository(pool)
+
+        repo.get_term_structure("SPY", _TS)
+
+        sql, _ = cursor.execute.call_args[0]
+        assert "COALESCE" in sql
+        assert "SUM(iv * open_interest)" in sql
+        assert "NULLIF(SUM(open_interest), 0)" in sql
+        assert "AVG(iv)" in sql  # fallback branch
+
+    def test_empty_result(self):
+        pool, cursor = _make_pool_and_cursor()
+        cursor.fetchall.return_value = []
+        repo = IvSurfaceRepository(pool)
+
+        result = repo.get_term_structure("SPY", _TS)
+
+        assert result == []
+
+    def test_raises_on_naive_ts(self):
+        pool, _ = _make_pool_and_cursor()
+        repo = IvSurfaceRepository(pool)
+        naive_ts = datetime(2026, 5, 16, 21, 15)
+
+        with pytest.raises(ValueError, match="tz-aware"):
+            repo.get_term_structure("SPY", naive_ts)
+
+        pool.cursor.assert_not_called()
+
+
+class TestGetLatestSurface:
+    """get_latest_surface() — MAX(ts) per ticker, None if empty."""
+
+    def test_returns_max_ts(self):
+        pool, cursor = _make_pool_and_cursor()
+        latest = datetime(2026, 5, 16, 21, 15, tzinfo=timezone.utc)
+        cursor.fetchone.return_value = (latest,)
+        repo = IvSurfaceRepository(pool)
+
+        result = repo.get_latest_surface("SPY")
+
+        assert result == latest
+
+    def test_returns_none_when_empty(self):
+        pool, cursor = _make_pool_and_cursor()
+        cursor.fetchone.return_value = (None,)
+        repo = IvSurfaceRepository(pool)
+
+        result = repo.get_latest_surface("SPY")
+
+        assert result is None
+
+    def test_returns_none_when_no_row(self):
+        pool, cursor = _make_pool_and_cursor()
+        cursor.fetchone.return_value = None
+        repo = IvSurfaceRepository(pool)
+
+        result = repo.get_latest_surface("SPY")
+
+        assert result is None
+
+    def test_filters_by_ticker(self):
+        pool, cursor = _make_pool_and_cursor()
+        cursor.fetchone.return_value = (None,)
+        repo = IvSurfaceRepository(pool)
+
+        repo.get_latest_surface("QQQ")
+
+        sql, params = cursor.execute.call_args[0]
+        assert "MAX(ts)" in sql
+        assert "WHERE underlying = %s" in sql
+        assert params == ("QQQ",)
+
+    def test_does_not_validate_ts(self):
+        """get_latest_surface takes only ticker — no ts arg → no ValueError path."""
+        pool, cursor = _make_pool_and_cursor()
+        cursor.fetchone.return_value = (None,)
+        repo = IvSurfaceRepository(pool)
+
+        # No exception raised on any ticker string
+        result = repo.get_latest_surface("SPY")
+        assert result is None

@@ -132,3 +132,144 @@ class IvSurfaceRepository:
                 rows,
             )
             return cur.rowcount
+
+    # ── READ methods (Phase 2 consumer surface, S.10.cons-b ADR-009 D3) ───────
+
+    def get_surface_for_ticker(
+        self,
+        ticker: str,
+        ts: datetime,
+    ) -> list[dict]:
+        """Return full surface rows para (ticker, ts).
+
+        Used by SchwabDataLayer.snapshot() (S.10.cons-d) to populate
+        TickerSnapshot.surface field. Returned dicts include all V007 columns
+        excluding (ts, underlying) which are query constants.
+
+        Args:
+            ticker: Underlying symbol.
+            ts: tz-aware timestamp (typically result of get_latest_surface).
+
+        Returns:
+            List of dicts con keys: expiration, strike, option_type, iv, delta,
+            gamma, theta, vega, open_interest, volume. Ordered by expiration ASC,
+            strike ASC, option_type ASC. Empty list if no rows.
+
+        Raises:
+            ValueError: si ts naive (defensive — naive ts queries hypertable
+                con timezone confusion risk).
+        """
+        if ts.tzinfo is None:
+            raise ValueError(
+                f"IvSurfaceRepository.get_surface_for_ticker: ts must be tz-aware, "
+                f"got {ts!r}"
+            )
+
+        sql = """
+            SELECT expiration, strike, option_type, iv, delta, gamma, theta, vega,
+                   open_interest, volume
+            FROM market.iv_surface
+            WHERE underlying = %s AND ts = %s
+            ORDER BY expiration ASC, strike ASC, option_type ASC
+        """
+
+        with self._pool.cursor() as cur:
+            cur.execute(sql, (ticker, ts))
+            rows = cur.fetchall()
+
+        return [
+            {
+                "expiration": row[0],
+                "strike": row[1],
+                "option_type": row[2],
+                "iv": row[3],
+                "delta": row[4],
+                "gamma": row[5],
+                "theta": row[6],
+                "vega": row[7],
+                "open_interest": row[8],
+                "volume": row[9],
+            }
+            for row in rows
+        ]
+
+    def get_term_structure(
+        self,
+        ticker: str,
+        ts: datetime,
+    ) -> list[tuple[int, float]]:
+        """Return term structure as list of (dte, weighted_avg_iv) tuples ordered.
+
+        Phase 1 proxy (D3-1 sub-decision S.10.cons-b): weighted AVG(iv * open_interest)
+        per expiration. OI concentrates at ATM strikes naturally en options markets,
+        so weighted average proxies ATM IV without spot price lookup.
+
+        Fallback COALESCE: si total OI=0 per expiration (edge case fresh bootstrap),
+        falls back to plain AVG(iv).
+
+        Future trigger ADR-009.X o ADR-010+: si paper trading signal degraded, add
+        spot price column to market.iv_surface o cross-table join iv_history. NOT
+        implemented Phase 1.
+
+        Args:
+            ticker: Underlying symbol.
+            ts: tz-aware timestamp.
+
+        Returns:
+            List of (dte_days, atm_iv_proxy) tuples ordered front-to-back. dte_days
+            computed as (expiration - ts.date()).days. Empty list if no data.
+
+        Raises:
+            ValueError: si ts naive.
+        """
+        if ts.tzinfo is None:
+            raise ValueError(
+                f"IvSurfaceRepository.get_term_structure: ts must be tz-aware, "
+                f"got {ts!r}"
+            )
+
+        sql = """
+            SELECT
+                expiration,
+                COALESCE(
+                    SUM(iv * open_interest) / NULLIF(SUM(open_interest), 0),
+                    AVG(iv)
+                ) AS atm_iv_proxy
+            FROM market.iv_surface
+            WHERE underlying = %s AND ts = %s
+            GROUP BY expiration
+            ORDER BY expiration ASC
+        """
+
+        with self._pool.cursor() as cur:
+            cur.execute(sql, (ticker, ts))
+            rows = cur.fetchall()
+
+        return [
+            ((row[0] - ts.date()).days, float(row[1]))
+            for row in rows
+        ]
+
+    def get_latest_surface(self, ticker: str) -> datetime | None:
+        """Return latest ts available para ticker en iv_surface, o None.
+
+        Used por SchwabDataLayer.snapshot() para identify most recent surface
+        data persistent. Result feeds get_surface_for_ticker + get_term_structure
+        consistent ts argument.
+
+        Args:
+            ticker: Underlying symbol.
+
+        Returns:
+            Latest ts (tz-aware UTC) si data exists, None si empty.
+        """
+        sql = """
+            SELECT MAX(ts) FROM market.iv_surface
+            WHERE underlying = %s
+        """
+
+        with self._pool.cursor() as cur:
+            cur.execute(sql, (ticker,))
+            row = cur.fetchone()
+
+        return row[0] if row and row[0] else None
