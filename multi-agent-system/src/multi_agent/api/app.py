@@ -116,7 +116,9 @@ async def _lifespan(app: FastAPI):
     from multi_agent.data_layer import SchwabDataLayer
     from multi_agent.persistence.iv_history_repository import IvHistoryRepository
     from multi_agent.persistence.iv_surface_repository import IvSurfaceRepository
+    from multi_agent.persistence.ohlcv_repository import OhlcvRepository
     from multi_agent.workers.iv_history_worker import IvHistoryWorker
+    from multi_agent.workers.ohlcv_worker import OhlcvWorker
     from shared_core.brokers.schwab_client import SchwabClient
 
     # Emit warnings that couldn't be logged at import time (logging not yet configured)
@@ -283,6 +285,21 @@ async def _lifespan(app: FastAPI):
                 "✓ iv_surface populating enabled (per snapshot, D3-1 isolated)"
             )
 
+    # ── OhlcvWorker (Sprint 9 S.9.ohl-b, ADR-007 D3) ────────────────────────
+    # Stagger from IvHistoryWorker 21:15 UTC → 21:30 UTC (F-r7 mitigation).
+    # Mirror IvHistoryWorker pattern: dedicated SchwabClient (tech debt doble
+    # construcción accepted ADR-005 §9.3), dedicated OhlcvRepository on shared pool.
+    ohlcv_worker = None
+    ohlcv_task = None
+    if settings.USE_SCHWAB_DATA_LAYER and isinstance(app.state.data_layer, SchwabDataLayer):
+        ohlcv_schwab_client = SchwabClient.from_gcp()
+        ohlcv_repo = OhlcvRepository(pool)
+        app.state.ohlcv_repo = ohlcv_repo
+        ohlcv_worker = OhlcvWorker(repo=ohlcv_repo, schwab_client=ohlcv_schwab_client)
+        ohlcv_task = asyncio.create_task(ohlcv_worker.run())
+        app.state.ohlcv_worker = ohlcv_worker
+        logger.info("✓ OhlcvWorker active (snapshot 21:30 UTC daily, 4 timeframes)")
+
     # Telegram bot — inbound command polling.
     # Pool injected via bot_data so handlers share the same pool as the API
     # (no get_pool() singleton divergence). Fail-isolated: errors here must
@@ -323,9 +340,13 @@ async def _lifespan(app: FastAPI):
     retry_worker.shutdown()
     if iv_worker is not None:
         iv_worker.shutdown()
+    if ohlcv_worker is not None:
+        ohlcv_worker.shutdown()
     tasks_to_gather = [worker_task, retry_task]
     if iv_task is not None:
         tasks_to_gather.append(iv_task)
+    if ohlcv_task is not None:
+        tasks_to_gather.append(ohlcv_task)
     try:
         await asyncio.wait_for(
             asyncio.gather(*tasks_to_gather, return_exceptions=True),

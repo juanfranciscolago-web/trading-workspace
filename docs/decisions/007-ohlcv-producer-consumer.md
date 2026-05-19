@@ -1,7 +1,7 @@
 # ADR-007: market.ohlcv Producer + Consumer Foundation
 
 **Fecha:** 2026-05-19
-**Estado:** Propuesto
+**Estado:** Aceptado (2026-05-19)
 **Contexto:** Sprint 9 LOCKED via Sprint 9+ priority analysis (commit `4b54203`, 2026-05-19).
 ADR-008 Frame 3 Phase 1 (Schwab-native Tiers A+B+C+D) requires Tier C foundation = intraday
 OHLCV persistence. F-r1 finding: SchwabClient.get_price_history ya soporta frequency_type="minute"
@@ -201,15 +201,98 @@ Worker writes for backtest/historical/aggregation consumers. NO dual-write race 
 
 ---
 
-## 9. Close-out (S.9.ohl-b, pending)
+## 9. Close-out (S.9.ohl-b, 2026-05-19)
 
-> Sección se completa en S.9.ohl-b. Estructura prevista (mirror ADR-005/006 §9):
-> - §9.1 Sub-blocks delivered (S.9.ohl-a/b con commits + LOC + tests + sign-off dates).
-> - §9.2 Rule #15 findings summary (F-r1 a F-r8 + implementation findings).
-> - §9.3 Tech debt registered (deferred Q1-Q5).
-> - §9.4 Next steps Sprint 10+ (ADR-008 §9.4 + Sprint 9 lessons).
-> - Status: Propuesto → Aceptado.
+Sprint 9 ADR-007 ohlcv cerrado al 100% (2/2 sub-bloques compact pattern).
+ADR-007 status: Propuesto → Aceptado. market.ohlcv hypertable populated infra
+ready, OhlcvWorker schedule 21:30 UTC daily, 4 timeframes × 6 tickers = 24
+cells per run. Tier C foundation Frame 3 delivered.
+
+### 9.1 Sub-blocks delivered
+
+| Sub-block | Date | Commit | LOC delta | Tests delta | Description |
+|-----------|------|--------|-----------|-------------|-------------|
+| S.9.plan-a | 2026-05-19 | `4b54203` | +145 (doc) | 0 | Sprint 9+ priority analysis, ADR-007 locked |
+| S.9.ohl-a | 2026-05-19 | `b4bae64` | +215 (doc) | 0 | ADR-007 plan firmado, Status Propuesto |
+| S.9.ohl-b | 2026-05-19 | (this) | +~1,043 (code+tests+doc) | +33 | OhlcvRepository + OhlcvWorker + lifespan + tests + close-out Aceptado |
+| **Total** | — | — | **~1,403 LOC** | **+33** | — |
+
+Tests baseline: 918 → 951 + 1 skipped post-Sprint 9 (multi-agent 856 + shared_core 95).
+
+### 9.2 Rule #15 findings summary
+
+Pre-recolección + implementation disparó 9 findings críticos NUEVOS:
+
+- **F-r1** (S.9.plan-a): SchwabClient.get_price_history ya intraday-ready Sprint 5 S.5.6c.
+  NO new port required → effort 3-5 días → 2-3 días.
+- **F-r2 CRITICAL** (S.9.ohl-a): V007 schema comment "1m | 5m | 1h | 1d" outdated vs
+  Schwab native {1, 5, 10, 15, 30} + daily. 1h NOT native, defer Q2.
+- **F-r3 CRITICAL** (S.9.ohl-a): Schwab period_type="day" cap 1-10 días → D6 simplification.
+- **F-r4** (S.9.ohl-a): V007 volume BIGINT correct (full market scale).
+- **F-r5** (S.9.ohl-a): SchwabDataLayer.snapshot() ephemeral; Worker dedicated persistence
+  truth (D8).
+- **F-r6** (S.9.ohl-a): Timezone epoch_ms → TIMESTAMPTZ UTC pattern Sprint 5 reusable.
+- **F-r7** (S.9.ohl-a): Two workers 21:15 UTC concurrent → D3 stagger 21:30 UTC.
+- **F-r8** (S.9.ohl-a): VIX/VVIX intraday architectural diff → split ADR-007.5 future.
+- **F-r9 CRITICAL** (S.9.ohl-b PARTE 2 pre-Write): Pool API divergence — spec asumió
+  psycopg_pool.ConnectionPool, reality es PostgresPool wrapper con auto-commit.
+  Sin fix, INSERTs silently no persisten (silent failure mode). Catch ANTES de Write
+  via verify reality. Pattern mirror IvHistoryRepository/IvSurfaceRepository proven.
+
+Most impactful catches:
+
+- **F-r9 CRITICAL** prevented silent failure mode (peor que crash visible). Catch ANTES
+  de Write demuestra rule #15 strict + Camino 3 protocol working at peak quality.
+- **F-r3 CRITICAL** drove D6 KISS simplification (10-day window uniform vs
+  bootstrap-vs-incremental branching).
+- **F-r7** drove D3 stagger mitigation (21:30 vs concurrent 21:15).
+
+**Pattern observed**: 2 catches críticos pre-Write hoy martes (c0cf3d6 filename + F-r9
+pool API). Sin auto-mode interpretación aggressive O rule #15 pause + verify, ambos
+shipped broken. Quality discipline pays substantial dividends.
+
+### 9.3 Tech debt registered for Sprint 10+
+
+NEW Sprint 9 items (5 new):
+
+1. **1m timeframe deferred** (D2-1) → ADR-007.5 trigger si HERMES 0DTE SPX requires.
+2. **1h compute pipeline deferred** (D2-2) → ADR-010 Tier A scope o ADR-007.5.
+3. **VIX/VVIX intraday path deferred** (D1) → ADR-007.5 (separate from market.ohlcv).
+4. **Backtest depth >10 días** (D6) → ADR-007.5 trigger si ATHENA Phase 2 surface needs.
+5. **Schwab rate limit observability** → monitor first OhlcvWorker runs, validate D3
+   stagger 15-min sufficient (R5 mitigation).
+
+Inherited cross-ref:
+
+- **ADR-005 §9.3**: 11 items (#2 + #7 RESOLVED Sprint 7/6, 9 pending).
+- **ADR-006 §9.3**: 5 NEW items pending (F7 disambig, etc.).
+- **ADR-008 §9.3**: 5 NEW items pending (V0XX migration, ADR-009/010/011 scope informed).
+
+### 9.4 Next steps Sprint 10+
+
+ADR-007 Aceptado triggers Sprint 10 priority re-score per S.9.plan-a TENTATIVE caveat.
+
+Sprint 10 candidates (per ADR-008 §9.4 + Sprint 9 lessons):
+
+- Phase 2 consumer surface (ATHENA quality unlock, independent path).
+- ATLAS portfolio integration (paper trading discipline unblocker, adjacent).
+
+Re-score fresh post-Sprint 9 reflect lessons:
+
+- F-r9 pattern catch demuestra valor de pre-recolección strict.
+- D6 KISS simplification pattern reusable downstream ADRs.
+- Worker stagger pattern (D3) reusable Sprint 11+ ADR-009.
+
+Sprint 11+ adjacent: ATLAS portfolio integration probable Sprint 10/11.
+Sprint 11-12: ADR-009 Schwab WebSocket multi-sprint.
+Sprint 12+: ADR-010 GEX compute.
+Sprint 13-16+: ADR-011 HERMES real implementation.
+
+Foundation building era continues. Trio ATHENA+APOLLO+ATLAS paper trading parallel
+durante Sprint 10-13 build-out.
 
 ---
 
-> **Próximo sub-bloque:** S.9.ohl-b (implementation + close-out). Inicia tras Juan sign-off plan firmado actual.
+> **Sprint 9 ADR-007 ohlcv cerrado al 100%** (2/2 sub-blocks compact pattern:
+> S.9.ohl-a + S.9.ohl-b). Próximo: Sprint 10 priority analysis re-score con
+> ADR-007 context. Foundation building Sprint 10-13 continues.
