@@ -1,7 +1,7 @@
 # ADR-008: HERMES Tactical Flow Trader Scope
 
 **Fecha:** 2026-05-19
-**Estado:** Propuesto
+**Estado:** Aceptado (2026-05-19)
 **Contexto:** Sprint 8 LOCKED via Sprint 8+ priority analysis (commit `4bd0819`, 2026-05-18). Pain primary B confirmed (HERMES tactical design) + B2 path (Scope ADR primero, data layer después). Decision meta: "FULL" HERMES per masterdoc §3.3, accepting Sprint 14-16+ timeline. Esta ADR define Phase 1 scope (Schwab-native data tiers A-D, Sprint 9-13) vs Phase 2 deferred (external vendors Tier E, Sprint 16+).
 
 ---
@@ -303,15 +303,86 @@ ADR-008 Aceptado triggers Sprint 9 planning re-score (per rule #15 caveat memo S
 
 ---
 
-## 9. Close-out (S.8.her-c, pending)
+## 9. Close-out (S.8.her-c, 2026-05-19)
 
-> Sección se completa en S.8.her-c. Estructura prevista (mirror ADR-005/006):
-> - §9.1 Sub-blocks delivered (S.8.her-a/b/c con commits + LOC + sign-off dates).
-> - §9.2 Rule #15 findings summary.
-> - §9.3 Tech debt registered for Sprint 9-14+.
-> - §9.4 Next steps Sprint 9+ (ADR-007 ohlcv priority + sequence re-score).
-> - Status: Propuesto → Aceptado.
+Sprint 8 HERMES Scope ADR cerrado al 100% (3/3 sub-bloques). ADR-008
+status: Propuesto → Aceptado. Phase 1 boundary locked (Frame 3 Schwab-native
+Tiers A+B+C+D). Phase 2 (Tier E vendors) deferred Sprint 16+ con trigger
+explícit (Q5 ROI gate). Sprint 9-14+ downstream ADRs sequenced (ADR-007 →
+ADR-009 → ADR-010 → ADR-011) con Frame 3 informed.
+
+### 9.1 Sub-blocks delivered
+
+| Sub-block | Date | Commit | LOC delta | Tests delta | Description |
+|-----------|------|--------|-----------|-------------|-------------|
+| S.8.plan-a | 2026-05-18 | `4bd0819` | +178 (doc) | 0 | Sprint 8+ priority analysis — HERMES Scope ADR locked Sprint 8 |
+| S.8.her-a | 2026-05-19 | `437af13` | +262 (doc) | 0 | ADR-008 plan firmado, Status Propuesto |
+| S.8.her-b | 2026-05-19 | `e6d73fd` | +55 (doc) | 0 | D1-D9 refinement + 4 sub-decisions D-X-Y + 6 wording tweaks |
+| S.8.her-c | 2026-05-19 | (this) | ~+100 (doc) | 0 | Close-out + Status Aceptado |
+| **Total** | — | — | **~595 LOC** | **0** | — |
+
+Tests baseline preserved across Sprint 8: **918 passing + 1 skipped**.
+
+### 9.2 Rule #15 findings summary
+
+Pre-recolección rule #15 disciplinada disparó ~15 findings across sub-blocks:
+
+- **S.8.plan-a (4)**: strategic matrix verify-not-exist via memory search, Frame 3 sub-decision needed, dimension framework refined con Juan input, 6+1 candidates including ATLAS portfolio.
+- **S.8.her-a (5)**: F1 time horizon architectural mismatch CRITICAL, F2 data source gap 8/0 CRITICAL, F3 Eolo NOT directly applicable, F4 ATHENA/APOLLO prompt pattern reusable, F5 sub-blocks pattern doc-only.
+- **S.8.her-b (6)**: D7 vs D5 internal inconsistency Sprint 10 Tier A (W4), D7 vs S.8.plan-a cross-doc misalignment Sprint 13-14 vs 14-16+ (W5), D4 schema either-or anti-pattern detected → canonical seconds, D1 table dual-tier ambiguities → explicit phrasing, D2 proposer threshold pre-commit risk → defer ADR-011, D4-2 dual-output behavior explicit.
+
+Most impactful catches:
+
+- **F1 (S.8.her-a) CRITICAL**: HERMES intraday vs current daily snapshot-based architecture. Forces D5/D6/D7 sequencing decisions (4 downstream ADRs).
+- **F2 (S.8.her-a) CRITICAL**: 8/0 data source gap. Phase 1 boundary becomes ADR-008 core decision.
+- **W4 (S.8.her-b) INTERNAL**: D7 Sprint 10 said "Tier A base" but D5 says Tier A Sprint 12+. Resolved: consumer reader foundation, not HERMES compute.
+- **D4 schema (S.8.her-b) ARCHITECTURAL**: `time_horizon_days int` incompatible HERMES fractional. Canonical seconds unification (D4-1) avoids either-or anti-pattern.
+
+**Pattern observed:** rule #15 caught 1 internal inconsistency (W4) + 1 cross-doc misalignment (W5) + 1 architectural schema mismatch (D4) en S.8.her-b refinement. **Refinement value substantive** despite Camino 3 protocol (Claude-Code-driven recommendations, Juan sign-off deliberate per "ok" responses).
+
+### 9.3 Tech debt registered for Sprint 9-14+
+
+NEW Sprint 8 items (5 new):
+
+1. **Migration V0XX `time_horizon_days` → `time_horizon_seconds`** schema unification (ADR-011 scope). ATHENA prompt + agent + Repository + ATLAS validation + Dashboard formatter update.
+2. **ADR-007 (ohlcv producer/consumer)** scope informed by Frame 3 Tier C — intraday timeframes 5m/15m/30m/60m + Tier A volume profile foundation.
+3. **ADR-009 (Schwab WebSocket port)** scope informed by Frame 3 Tier D — multi-sprint pattern part 1 Sprint 11 + part 2 Sprint 12.
+4. **ADR-010 (GEX compute pipeline)** scope informed by Frame 3 Tier A — iv_surface OI sufficient validation Q6 con external feed comparison (SpotGamma).
+5. **ADR-011 (HERMES implementation)** scope informed by D1-D9 + D-X-Y sub-decisions firmadas — agent class + prompt + debate integration + Q5 ROI gate + proposer threshold tuning.
+
+Inherited from ADR-005 §9.3 + ADR-006 §9.3 (cross-ref policy):
+
+- **ADR-005 §9.3**: 11 items (#2 RESOLVED Sprint 7, #7 RESOLVED Sprint 6, 9 pending).
+- **ADR-006 §9.3**: 5 NEW items pending (F7 disambig, executemany canonical, MagicMock plain, positional args, D6-1 ATHENA prompt drift).
+
+Sprint 8 cross-ref policy: ADR-008 references ADR-005/006 §9.3 IDs explicit. Downstream ADRs (007, 009, 010, 011) inherit ADR-008 §9.3 canonical IDs.
+
+### 9.4 Next steps Sprint 9+
+
+ADR-008 Aceptado triggers Sprint 9 priority re-score per S.8.plan-a TENTATIVE caveat (rule #15: verify reality before spec, NO anticipated 4-6 months ahead).
+
+Sprint 9+ candidates per ADR-008 D6 sequencing:
+
+- **Sprint 9**: ADR-007 (market.ohlcv producer/consumer). Tier C intraday + Tier A volume profile foundation. Estimate ~3-5 días.
+- **Sprint 10**: Phase 2 consumer surface (ATHENA quality unlock). Independent path, ATHENA-side enhancement. ~2-3 días.
+- **Sprint 11-12**: ADR-009 Schwab WebSocket port (multi-sprint part 1 + part 2). Tier D real-time L2/tape. ~6-8 días.
+- **Sprint 12+**: ADR-010 GEX compute pipeline. Tier A dealer flows. ~3-5 días.
+- **Sprint 13-16+**: ADR-011 HERMES implementation. Agent class + prompt + debate integration + paper trading Q5 ROI gate.
+
+Adjacent candidate (NOT in ADR-006 §9.4 canonical):
+
+- **ATLAS portfolio integration** (Candidate #7 priority-8-analysis). `SchwabClient.get_positions/get_balances` stubs resolution. ~3-5 días. Sprint 11+ probable, pre-HERMES paper trading discipline.
+
+Deferred Phase 2 (Sprint 16+):
+
+- ADR-012 (potential) dark pool feed vendor integration.
+- ADR-013 (potential) real-time news feed vendor integration.
+- ADR-014 (potential) NYX sentiment data layer (parallel track).
+
+**Trigger doctrine**: positive ROI required pre-vendor cost (D8 + D9), NO speculation.
+
+Foundation building era continues Sprints 9-13. Paper trading parallel con ATHENA + APOLLO + ATLAS trio durante build-out. HERMES integration Sprint 13-16+ post-Phase 1 infra delivery.
 
 ---
 
-> **Próximo sub-bloque:** S.8.her-b (refinement strategic discussion + D1-D9 lock). Inicia tras Juan sign-off del plan firmado actual.
+> **Sprint 8 HERMES Scope ADR cerrado al 100%** (3/3 sub-blocks: a/b/c). Próximo: Sprint 9 priority analysis re-score con ADR-008 Frame 3 informed. Foundation building era arranca.
