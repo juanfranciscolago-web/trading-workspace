@@ -26,6 +26,7 @@ from multi_agent.data_layer.interfaces import DataLayer
 if TYPE_CHECKING:
     from multi_agent.persistence.iv_history_repository import IvHistoryRepository
     from multi_agent.persistence.iv_surface_repository import IvSurfaceRepository
+    from multi_agent.persistence.ohlcv_repository import OhlcvRepository
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,8 @@ logger = logging.getLogger(__name__)
 def _select_data_layer(
     settings_obj: Settings,
     iv_history_repo: IvHistoryRepository | None = None,
+    iv_surface_repo: IvSurfaceRepository | None = None,
+    ohlcv_repo: OhlcvRepository | None = None,
 ) -> DataLayer:
     """Construct the DataLayer per USE_SCHWAB_DATA_LAYER flag.
 
@@ -71,6 +74,8 @@ def _select_data_layer(
             data_layer = SchwabDataLayer(
                 schwab_client,
                 iv_history_repo=iv_history_repo,
+                iv_surface_repo=iv_surface_repo,
+                ohlcv_repo=ohlcv_repo,
             )
             iv_mode = "real (ADR-005 D5)" if iv_history_repo else "50.0 fallback"
             logger.info(
@@ -163,15 +168,19 @@ async def _lifespan(app: FastAPI):
     # When False (StubDataLayer path), keep None — SchwabDataLayer fallback
     # path also accepts None per ADR-005 D5 (S.6.iv-d).
     iv_history_repo: IvHistoryRepository | None = None
-    # iv_surface_repo: parallel construct for S.7.surf-c. Consumed by
-    # IvHistoryWorker only (D6 WRITE-only Sprint 7; SchwabDataLayer does
-    # NOT read iv_surface until Phase 2 consumer surface sub-block).
+    # iv_surface_repo + ohlcv_repo: Phase 2 consumer surface (S.10.cons-d,
+    # ADR-009 D4). Consumed por SchwabDataLayer (READ) + IvHistoryWorker /
+    # OhlcvWorker (WRITE). Construct shared instances before _select_data_layer
+    # so SchwabDataLayer reads from same pool as workers write.
     iv_surface_repo: IvSurfaceRepository | None = None
+    ohlcv_repo: OhlcvRepository | None = None
     if settings.USE_SCHWAB_DATA_LAYER:
         iv_history_repo = IvHistoryRepository(pool)
         iv_surface_repo = IvSurfaceRepository(pool)
+        ohlcv_repo = OhlcvRepository(pool)
     app.state.iv_history_repo = iv_history_repo
     app.state.iv_surface_repo = iv_surface_repo
+    app.state.ohlcv_repo = ohlcv_repo
 
     # ATHENA real agent dependencies (Sprint 3 B.3.5).
     # Config path: env override + project-root fallback (mirrors risk/config.py).
@@ -181,7 +190,12 @@ async def _lifespan(app: FastAPI):
     )
     router_config_path = os.environ.get("CLAUDE_ROUTER_CONFIG", str(default_router_config))
     app.state.claude_router = ClaudeRouter.from_config(router_config_path)
-    app.state.data_layer = _select_data_layer(settings, iv_history_repo=iv_history_repo)
+    app.state.data_layer = _select_data_layer(
+        settings,
+        iv_history_repo=iv_history_repo,
+        iv_surface_repo=iv_surface_repo,
+        ohlcv_repo=ohlcv_repo,
+    )
     logger.info(
         "✓ ATHENA dependencies ready: claude_router (config=%s), data_layer=%s",
         router_config_path,
@@ -288,14 +302,17 @@ async def _lifespan(app: FastAPI):
     # ── OhlcvWorker (Sprint 9 S.9.ohl-b, ADR-007 D3) ────────────────────────
     # Stagger from IvHistoryWorker 21:15 UTC → 21:30 UTC (F-r7 mitigation).
     # Mirror IvHistoryWorker pattern: dedicated SchwabClient (tech debt doble
-    # construcción accepted ADR-005 §9.3), dedicated OhlcvRepository on shared pool.
+    # construcción accepted ADR-005 §9.3). OhlcvRepository is shared con
+    # SchwabDataLayer (Sprint 10 S.10.cons-d) via app.state.ohlcv_repo
+    # constructed above (line ~180).
     ohlcv_worker = None
     ohlcv_task = None
     if settings.USE_SCHWAB_DATA_LAYER and isinstance(app.state.data_layer, SchwabDataLayer):
         ohlcv_schwab_client = SchwabClient.from_gcp()
-        ohlcv_repo = OhlcvRepository(pool)
-        app.state.ohlcv_repo = ohlcv_repo
-        ohlcv_worker = OhlcvWorker(repo=ohlcv_repo, schwab_client=ohlcv_schwab_client)
+        ohlcv_worker = OhlcvWorker(
+            repo=app.state.ohlcv_repo,
+            schwab_client=ohlcv_schwab_client,
+        )
         ohlcv_task = asyncio.create_task(ohlcv_worker.run())
         app.state.ohlcv_worker = ohlcv_worker
         logger.info("✓ OhlcvWorker active (snapshot 21:30 UTC daily, 4 timeframes)")

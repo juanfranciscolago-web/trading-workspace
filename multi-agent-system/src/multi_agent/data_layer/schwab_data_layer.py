@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import math
 import statistics
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from shared_core.brokers.schwab_client import SchwabClient
@@ -35,6 +35,8 @@ from .universe import TICKER_UNIVERSE
 
 if TYPE_CHECKING:
     from ..persistence.iv_history_repository import IvHistoryRepository
+    from ..persistence.iv_surface_repository import IvSurfaceRepository
+    from ..persistence.ohlcv_repository import OhlcvRepository
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,16 @@ DTE_PROXIMITY_DAYS = 15             # Accept 30 ± 15 days (matches ATHENA 15-45
 DELTA_TARGET = 0.25                 # 25-delta skew (ADR-004 D5, industry std)
 DELTA_PROXIMITY_WARN = 0.10         # Logs warning if closest delta diff > this
 DAILY_HISTORY_PERIOD_MONTHS = 3     # ~63 trading days — enough for 30d realized vol
+
+# D4-2 sub-decision: configurable lookback per timeframe (Sprint 10 S.10.cons-d).
+TIMEFRAME_LOOKBACK_BARS = {"5m": 78, "15m": 96, "30m": 48, "1d": 30}
+"""Bar count per timeframe para Phase 2 consumer surface.
+
+5m: 78 bars = ~6.5h trading session.
+15m: 96 bars = ~24h coverage.
+30m: 48 bars = ~24h coverage.
+1d: 30 days lookback.
+"""
 
 
 # ── SchwabDataLayer ───────────────────────────────────────────────────────────
@@ -67,6 +79,8 @@ class SchwabDataLayer(DataLayer):
         self,
         schwab_client: SchwabClient,
         iv_history_repo: IvHistoryRepository | None = None,
+        iv_surface_repo: IvSurfaceRepository | None = None,
+        ohlcv_repo: OhlcvRepository | None = None,
     ) -> None:
         """Init SchwabDataLayer.
 
@@ -78,9 +92,19 @@ class SchwabDataLayer(DataLayer):
                 to 50.0 placeholder per ADR-005 D5 N<10 semantics. Wired by
                 lifespan when USE_SCHWAB_DATA_LAYER=True. NOT required to
                 preserve testability of existing 22 SchwabDataLayer tests.
+            iv_surface_repo: Optional IvSurfaceRepository for Phase 2 consumer
+                surface (S.10.cons-d, ADR-009 D4). Populates TickerSnapshot
+                term_structure + surface fields. If None, Phase 2 fields
+                fallback to empty defaults (D4-3 isolation).
+            ohlcv_repo: Optional OhlcvRepository for Phase 2 consumer surface
+                (S.10.cons-d, ADR-009 D4). Populates TickerSnapshot
+                ohlcv_intraday field per TIMEFRAME_LOOKBACK_BARS (D4-2).
+                If None, ohlcv_intraday falls back to empty dict.
         """
         self._client = schwab_client
         self._iv_history_repo = iv_history_repo
+        self._iv_surface_repo = iv_surface_repo
+        self._ohlcv_repo = ohlcv_repo
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -150,6 +174,9 @@ class SchwabDataLayer(DataLayer):
                 ticker, current_atm_iv,
             )
 
+        # Phase 2 consumer surface fields (Sprint 10 S.10.cons-d, ADR-009 D4).
+        phase2 = self._build_phase2_fields(ticker)
+
         return TickerSnapshot(
             ticker=ticker,
             last_price=round(last_price, 2),
@@ -159,7 +186,152 @@ class SchwabDataLayer(DataLayer):
             iv_percentile=iv_rank_value,                    # D6: mirror Phase 1
             skew=skew,
             realized_vol_30d=round(realized_vol_30d, 4),
+            term_structure=phase2["term_structure"],
+            surface=phase2["surface"],
+            ohlcv_intraday=phase2["ohlcv_intraday"],
         )
+
+    # ── Phase 2 consumer surface (ADR-009 D4, S.10.cons-d) ────────────────────
+
+    def _build_phase2_fields(self, ticker: str) -> dict:
+        """Build Phase 2 consumer surface fields per ADR-009 D4.
+
+        Returns dict con keys term_structure, surface, ohlcv_intraday.
+        D4-3 sub-decision: si repos empty (None) o no data, return empty
+        defaults + log WARNING (D-γ isolation pattern proven S.7.surf-c).
+
+        Args:
+            ticker: Underlying symbol.
+
+        Returns:
+            dict con 3 keys ready para TickerSnapshot construction:
+            - term_structure: list[tuple[int, float]]
+            - surface: dict[int, list[float]] keyed by DTE
+            - ohlcv_intraday: dict[str, list[OHLCV]]
+        """
+        empty = {"term_structure": [], "surface": {}, "ohlcv_intraday": {}}
+
+        if self._iv_surface_repo is None or self._ohlcv_repo is None:
+            return empty
+
+        # iv_surface fields
+        term_structure: list[tuple[int, float]] = []
+        surface: dict[int, list[float]] = {}
+        try:
+            latest_ts = self._iv_surface_repo.get_latest_surface(ticker)
+            if latest_ts is not None:
+                term_structure = self._iv_surface_repo.get_term_structure(
+                    ticker, latest_ts
+                )
+                rows = self._iv_surface_repo.get_surface_for_ticker(
+                    ticker, latest_ts
+                )
+                surface = self._build_dte_skew_surface(rows, latest_ts)
+            else:
+                logger.warning(
+                    "SchwabDataLayer Phase 2: no iv_surface data for %s "
+                    "(D4-3 isolation)",
+                    ticker,
+                )
+        except Exception:
+            logger.warning(
+                "SchwabDataLayer Phase 2: iv_surface read failed for %s "
+                "(D4-3 isolation), continuing",
+                ticker,
+                exc_info=True,
+            )
+
+        # ohlcv_intraday fields per timeframe
+        ohlcv_intraday: dict[str, list[OHLCV]] = {}
+        for timeframe, lookback_bars in TIMEFRAME_LOOKBACK_BARS.items():
+            try:
+                since = datetime.now(timezone.utc) - timedelta(days=60)
+                bars_raw = self._ohlcv_repo.get_bars(
+                    ticker, timeframe, since=since, limit=lookback_bars
+                )
+                ohlcv_intraday[timeframe] = [
+                    OHLCV(
+                        timestamp=b["ts"],
+                        open=float(b["open"]),
+                        high=float(b["high"]),
+                        low=float(b["low"]),
+                        close=float(b["close"]),
+                        volume=int(b["volume"]) if b["volume"] is not None else 0,
+                    )
+                    for b in bars_raw
+                ]
+            except Exception:
+                logger.warning(
+                    "SchwabDataLayer Phase 2: ohlcv read failed for %s %s "
+                    "(D4-3 isolation), continuing",
+                    ticker,
+                    timeframe,
+                    exc_info=True,
+                )
+                ohlcv_intraday[timeframe] = []
+
+        return {
+            "term_structure": term_structure,
+            "surface": surface,
+            "ohlcv_intraday": ohlcv_intraday,
+        }
+
+    @staticmethod
+    def _build_dte_skew_surface(
+        rows: list[dict],
+        ts: datetime,
+    ) -> dict[int, list[float]]:
+        """Build DTE-keyed skew surface per ADR-009 D2-2 canonical + D4-1.
+
+        Returns: dict[DTE → [atm_iv, put_25d_iv, call_25d_iv]] per expiration.
+
+        D4-1 delta bucketing range averaging:
+        - ATM (50-delta): strikes con |delta| ∈ [45, 55] (CALL or PUT averaged).
+        - put_25d: PUT strikes con |delta| ∈ [20, 30] (typically OTM puts).
+        - call_25d: CALL strikes con delta ∈ [20, 30] (typically OTM calls).
+
+        If any bucket empty for an expiration, fallback to ATM IV for that slot
+        (mirror get_term_structure proxy approach).
+        """
+        result: dict[int, list[float]] = {}
+        # Group rows by expiration.
+        by_exp: dict = {}
+        for row in rows:
+            exp = row["expiration"]
+            by_exp.setdefault(exp, []).append(row)
+
+        for exp, exp_rows in by_exp.items():
+            dte = (exp - ts.date()).days
+
+            # ATM bucket: |delta| ∈ [45, 55].
+            atm_ivs = [
+                float(r["iv"]) for r in exp_rows
+                if r["delta"] is not None
+                and 0.45 <= abs(float(r["delta"])) <= 0.55
+            ]
+            atm_iv = sum(atm_ivs) / len(atm_ivs) if atm_ivs else 0.0
+
+            # Put 25-delta: PUT con |delta| ∈ [20, 30].
+            put_25d_ivs = [
+                float(r["iv"]) for r in exp_rows
+                if r["option_type"] == "PUT"
+                and r["delta"] is not None
+                and 0.20 <= abs(float(r["delta"])) <= 0.30
+            ]
+            put_25d_iv = sum(put_25d_ivs) / len(put_25d_ivs) if put_25d_ivs else atm_iv
+
+            # Call 25-delta: CALL con delta ∈ [20, 30].
+            call_25d_ivs = [
+                float(r["iv"]) for r in exp_rows
+                if r["option_type"] == "CALL"
+                and r["delta"] is not None
+                and 0.20 <= float(r["delta"]) <= 0.30
+            ]
+            call_25d_iv = sum(call_25d_ivs) / len(call_25d_ivs) if call_25d_ivs else atm_iv
+
+            result[dte] = [atm_iv, put_25d_iv, call_25d_iv]
+
+        return result
 
     # ── iv_rank compute (ADR-005 S.6.iv-d) ────────────────────────────────────
 

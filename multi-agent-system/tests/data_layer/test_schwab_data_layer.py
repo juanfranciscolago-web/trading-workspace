@@ -473,3 +473,194 @@ class TestIvRankProgressive:
         assert any("iv_rank computed on full N=300 days" in r.message for r in debugs)
         assert len(infos) == 0
         assert len(warnings) == 0
+
+
+# ── TestPhase2ConsumerSurface (Sprint 10 S.10.cons-d, ADR-009 D4) ─────────────
+
+
+class TestPhase2ConsumerSurface:
+    """SchwabDataLayer Phase 2 fields per ADR-009 D4 + D4-1/D4-2/D4-3."""
+
+    _LOGGER_NAME = "multi_agent.data_layer.schwab_data_layer"
+
+    def _build_layer_with_repos(
+        self,
+        *,
+        iv_surface_repo: MagicMock | None = None,
+        ohlcv_repo: MagicMock | None = None,
+    ) -> tuple[SchwabDataLayer, MagicMock]:
+        mock_client = MagicMock()
+        mock_client.get_price_history.return_value = _make_candles()
+        mock_client.get_options_chain.return_value = _SAMPLE_CHAIN_RESPONSE
+        layer = SchwabDataLayer(
+            mock_client,
+            iv_surface_repo=iv_surface_repo,
+            ohlcv_repo=ohlcv_repo,
+        )
+        return layer, mock_client
+
+    def test_build_phase2_empty_when_repos_none(self):
+        """D4-3: si iv_surface_repo + ohlcv_repo None, return defaults vacíos."""
+        layer, _ = self._build_layer_with_repos()
+        result = layer._build_phase2_fields("SPY")
+        assert result == {"term_structure": [], "surface": {}, "ohlcv_intraday": {}}
+
+    def test_build_phase2_warns_when_iv_surface_empty(self, caplog):
+        """D4-3: get_latest_surface None → log WARNING + skip surface fields."""
+        iv_surface_repo = MagicMock()
+        iv_surface_repo.get_latest_surface.return_value = None
+        ohlcv_repo = MagicMock()
+        ohlcv_repo.get_bars.return_value = []
+        layer, _ = self._build_layer_with_repos(
+            iv_surface_repo=iv_surface_repo, ohlcv_repo=ohlcv_repo,
+        )
+
+        with caplog.at_level(logging.WARNING, logger=self._LOGGER_NAME):
+            result = layer._build_phase2_fields("SPY")
+
+        assert result["term_structure"] == []
+        assert result["surface"] == {}
+        assert any("no iv_surface data for SPY" in r.message for r in caplog.records)
+
+    def test_build_phase2_populates_term_structure(self):
+        """D4 + S.10.cons-b: term_structure from IvSurfaceRepository.get_term_structure."""
+        latest_ts = datetime(2026, 5, 19, 21, 15, tzinfo=timezone.utc)
+        iv_surface_repo = MagicMock()
+        iv_surface_repo.get_latest_surface.return_value = latest_ts
+        iv_surface_repo.get_term_structure.return_value = [(7, 0.20), (35, 0.22)]
+        iv_surface_repo.get_surface_for_ticker.return_value = []
+        ohlcv_repo = MagicMock()
+        ohlcv_repo.get_bars.return_value = []
+        layer, _ = self._build_layer_with_repos(
+            iv_surface_repo=iv_surface_repo, ohlcv_repo=ohlcv_repo,
+        )
+
+        result = layer._build_phase2_fields("SPY")
+
+        assert result["term_structure"] == [(7, 0.20), (35, 0.22)]
+        iv_surface_repo.get_term_structure.assert_called_once_with("SPY", latest_ts)
+
+    def test_build_phase2_dte_keyed_surface_with_skew(self):
+        """D2-2 canonical + D4-1: surface dict[DTE] = [atm, put25d, call25d]."""
+        from datetime import date as _date
+        latest_ts = datetime(2026, 5, 19, 21, 15, tzinfo=timezone.utc)
+        iv_surface_repo = MagicMock()
+        iv_surface_repo.get_latest_surface.return_value = latest_ts
+        iv_surface_repo.get_term_structure.return_value = []
+        # Provide rows con 3 expirations + delta buckets
+        iv_surface_repo.get_surface_for_ticker.return_value = [
+            # 7-DTE expiration
+            {"expiration": _date(2026, 5, 26), "option_type": "CALL", "delta": 0.50, "iv": 0.20},
+            {"expiration": _date(2026, 5, 26), "option_type": "PUT", "delta": -0.25, "iv": 0.18},
+            {"expiration": _date(2026, 5, 26), "option_type": "CALL", "delta": 0.25, "iv": 0.22},
+            # 35-DTE expiration
+            {"expiration": _date(2026, 6, 23), "option_type": "CALL", "delta": 0.50, "iv": 0.22},
+            {"expiration": _date(2026, 6, 23), "option_type": "PUT", "delta": -0.25, "iv": 0.20},
+            {"expiration": _date(2026, 6, 23), "option_type": "CALL", "delta": 0.25, "iv": 0.24},
+        ]
+        ohlcv_repo = MagicMock()
+        ohlcv_repo.get_bars.return_value = []
+        layer, _ = self._build_layer_with_repos(
+            iv_surface_repo=iv_surface_repo, ohlcv_repo=ohlcv_repo,
+        )
+
+        result = layer._build_phase2_fields("SPY")
+
+        assert 7 in result["surface"]
+        assert 35 in result["surface"]
+        # Each value = [atm, put25d, call25d]
+        assert result["surface"][7] == [0.20, 0.18, 0.22]
+        assert result["surface"][35] == [0.22, 0.20, 0.24]
+
+    def test_delta_bucketing_atm_50d_range(self):
+        """D4-1: ATM bucket = |delta| ∈ [45, 55] averaged."""
+        from datetime import date as _date
+        ts = datetime(2026, 5, 19, 21, 15, tzinfo=timezone.utc)
+        rows = [
+            {"expiration": _date(2026, 5, 26), "option_type": "CALL", "delta": 0.48, "iv": 0.20},
+            {"expiration": _date(2026, 5, 26), "option_type": "PUT", "delta": -0.52, "iv": 0.22},
+        ]
+        result = SchwabDataLayer._build_dte_skew_surface(rows, ts)
+        # ATM = avg(0.20, 0.22) = 0.21
+        assert result[7][0] == pytest.approx(0.21)
+
+    def test_delta_bucketing_put_25d_range(self):
+        """D4-1: put_25d bucket = PUT con |delta| ∈ [20, 30]."""
+        from datetime import date as _date
+        ts = datetime(2026, 5, 19, 21, 15, tzinfo=timezone.utc)
+        rows = [
+            {"expiration": _date(2026, 5, 26), "option_type": "CALL", "delta": 0.50, "iv": 0.20},
+            {"expiration": _date(2026, 5, 26), "option_type": "PUT", "delta": -0.25, "iv": 0.18},
+            {"expiration": _date(2026, 5, 26), "option_type": "PUT", "delta": -0.28, "iv": 0.19},
+        ]
+        result = SchwabDataLayer._build_dte_skew_surface(rows, ts)
+        # put_25d = avg(0.18, 0.19) = 0.185
+        assert result[7][1] == pytest.approx(0.185)
+
+    def test_delta_bucketing_call_25d_range(self):
+        """D4-1: call_25d bucket = CALL con delta ∈ [20, 30]."""
+        from datetime import date as _date
+        ts = datetime(2026, 5, 19, 21, 15, tzinfo=timezone.utc)
+        rows = [
+            {"expiration": _date(2026, 5, 26), "option_type": "CALL", "delta": 0.50, "iv": 0.20},
+            {"expiration": _date(2026, 5, 26), "option_type": "CALL", "delta": 0.25, "iv": 0.22},
+            {"expiration": _date(2026, 5, 26), "option_type": "CALL", "delta": 0.23, "iv": 0.23},
+        ]
+        result = SchwabDataLayer._build_dte_skew_surface(rows, ts)
+        # call_25d = avg(0.22, 0.23) = 0.225
+        assert result[7][2] == pytest.approx(0.225)
+
+    def test_delta_bucketing_empty_fallback_to_atm(self):
+        """D4-1: si put_25d or call_25d bucket empty, fallback to atm_iv."""
+        from datetime import date as _date
+        ts = datetime(2026, 5, 19, 21, 15, tzinfo=timezone.utc)
+        # Only ATM strike, no 25d skew strikes
+        rows = [
+            {"expiration": _date(2026, 5, 26), "option_type": "CALL", "delta": 0.50, "iv": 0.20},
+        ]
+        result = SchwabDataLayer._build_dte_skew_surface(rows, ts)
+        # Both put_25d + call_25d fallback to atm_iv = 0.20
+        assert result[7] == [0.20, 0.20, 0.20]
+
+    def test_ohlcv_intraday_populated_4_timeframes(self):
+        """D4-2: TIMEFRAME_LOOKBACK_BARS produces 4 timeframe keys."""
+        iv_surface_repo = MagicMock()
+        iv_surface_repo.get_latest_surface.return_value = None
+        ohlcv_repo = MagicMock()
+        ts = datetime(2026, 5, 19, 21, 0, tzinfo=timezone.utc)
+        ohlcv_repo.get_bars.return_value = [
+            {"ts": ts, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1000},
+        ]
+        layer, _ = self._build_layer_with_repos(
+            iv_surface_repo=iv_surface_repo, ohlcv_repo=ohlcv_repo,
+        )
+
+        result = layer._build_phase2_fields("SPY")
+
+        assert set(result["ohlcv_intraday"].keys()) == {"5m", "15m", "30m", "1d"}
+        # Each timeframe has 1 bar (from mock return)
+        for timeframe, bars in result["ohlcv_intraday"].items():
+            assert len(bars) == 1
+            assert isinstance(bars[0], OHLCV)
+
+    def test_ohlcv_intraday_warns_on_repo_error(self, caplog):
+        """D4-3: ohlcv_repo.get_bars raises → log WARNING + empty list per timeframe."""
+        iv_surface_repo = MagicMock()
+        iv_surface_repo.get_latest_surface.return_value = None
+        ohlcv_repo = MagicMock()
+        ohlcv_repo.get_bars.side_effect = RuntimeError("DB connection broken")
+        layer, _ = self._build_layer_with_repos(
+            iv_surface_repo=iv_surface_repo, ohlcv_repo=ohlcv_repo,
+        )
+
+        with caplog.at_level(logging.WARNING, logger=self._LOGGER_NAME):
+            result = layer._build_phase2_fields("SPY")
+
+        # All 4 timeframes have empty list (D-γ isolation)
+        for timeframe in ("5m", "15m", "30m", "1d"):
+            assert result["ohlcv_intraday"][timeframe] == []
+        # Warning logged for each failed timeframe
+        assert sum(
+            1 for r in caplog.records
+            if "ohlcv read failed for SPY" in r.message
+        ) == 4
