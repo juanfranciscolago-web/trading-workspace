@@ -129,3 +129,159 @@ class TestExposureHelpers:
     def test_sector_exposure_pct_empty_frozenset_zero(self):
         snap = _snap()
         assert snap.sector_exposure_pct(frozenset()) == 0.0
+
+
+# ── TestLiveSnapshotBuilder (Sprint 11 atlas-d, ADR-013 D6) ───────────────────
+
+
+from unittest.mock import MagicMock  # noqa: E402
+
+from multi_agent.risk.portfolio_snapshot import LiveSnapshotBuilder  # noqa: E402
+
+
+class TestLiveSnapshotBuilder:
+    """LiveSnapshotBuilder builds PortfolioSnapshot from live Schwab reads.
+
+    Covers ADR-013 D6 + sub-decisions D-η a D-λ + D-ι-A simplification.
+    """
+
+    @staticmethod
+    def _mock_schwab_client(
+        positions: list[dict] | None = None,
+        balances: dict | None = None,
+    ) -> MagicMock:
+        """Helper: build SchwabClient mock con configurable returns."""
+        client = MagicMock()
+        client.get_positions.return_value = positions or []
+        client.get_balances.return_value = balances or {
+            "cash": 0.0,
+            "buying_power": 0.0,
+            "total_value": 0.0,
+            "margin_used": 0.0,
+            "day_trading_buying_power": 0.0,
+        }
+        return client
+
+    def test_build_returns_portfolio_snapshot(self):
+        """LiveSnapshotBuilder.build() returns PortfolioSnapshot instance."""
+        client = self._mock_schwab_client()
+        builder = LiveSnapshotBuilder(client)
+        snapshot = builder.build()
+        assert isinstance(snapshot, PortfolioSnapshot)
+
+    def test_positions_mapped_to_position_views(self):
+        """Schwab positions → tuple[PositionView, ...]."""
+        positions = [
+            {
+                "symbol": "SPY",
+                "asset_class": "EQUITY",
+                "quantity": 100.0,
+                "market_value": 45000.0,
+                "average_price": 450.0,
+                "unrealized_pnl": 0.0,
+            }
+        ]
+        client = self._mock_schwab_client(positions=positions)
+        builder = LiveSnapshotBuilder(client)
+        snapshot = builder.build()
+        assert len(snapshot.positions) == 1
+        pv = snapshot.positions[0]
+        assert pv.ticker == "SPY"
+        assert pv.asset_class == "EQUITY"
+        assert pv.quantity == 100  # float → int
+        assert pv.market_value_usd == Decimal("45000.0")
+
+    def test_greeks_default_zero(self):
+        """D-η: delta/vega/theta default Decimal(0) (Schwab no greeks)."""
+        positions = [{
+            "symbol": "QQQ", "asset_class": "EQUITY", "quantity": 50.0,
+            "market_value": 20000.0, "average_price": 400.0, "unrealized_pnl": 0.0,
+        }]
+        client = self._mock_schwab_client(positions=positions)
+        snapshot = LiveSnapshotBuilder(client).build()
+        pv = snapshot.positions[0]
+        assert pv.delta == Decimal(0)
+        assert pv.vega == Decimal(0)
+        assert pv.theta == Decimal(0)
+
+    def test_ticker_raw_no_occ_parser(self):
+        """D-ι-A: symbol raw used as ticker (no OCC parser Phase 1)."""
+        positions = [
+            {"symbol": "SPY", "asset_class": "EQUITY", "quantity": 100.0,
+             "market_value": 45000.0, "average_price": 450.0, "unrealized_pnl": 0.0},
+            {"symbol": "SPY_062626P450", "asset_class": "OPTION",
+             "quantity": -5.0, "market_value": -1250.0, "average_price": 2.5,
+             "unrealized_pnl": 50.0, "option_type": "PUT", "strike": 450.0,
+             "expiration": "2026-06-26"},
+        ]
+        client = self._mock_schwab_client(positions=positions)
+        snapshot = LiveSnapshotBuilder(client).build()
+        assert snapshot.positions[0].ticker == "SPY"  # equity
+        assert snapshot.positions[1].ticker == "SPY_062626P450"  # OPTION raw
+
+    def test_balances_aggregated_to_snapshot(self):
+        """nav_usd ← total_value, cash_usd ← cash."""
+        balances = {
+            "cash": 50000.0,
+            "buying_power": 100000.0,
+            "total_value": 150000.0,
+            "margin_used": 25000.0,
+            "day_trading_buying_power": 200000.0,
+        }
+        client = self._mock_schwab_client(balances=balances)
+        snapshot = LiveSnapshotBuilder(client).build()
+        assert snapshot.nav_usd == Decimal("150000.0")
+        assert snapshot.cash_usd == Decimal("50000.0")
+
+    def test_buying_power_used_pct_computed(self):
+        """buying_power_used_pct = (1 - bp/total) * 100."""
+        balances = {
+            "cash": 50000.0, "buying_power": 75000.0, "total_value": 150000.0,
+            "margin_used": 0.0, "day_trading_buying_power": 0.0,
+        }
+        client = self._mock_schwab_client(balances=balances)
+        snapshot = LiveSnapshotBuilder(client).build()
+        # (1 - 75000/150000) * 100 = 50.0
+        assert snapshot.buying_power_used_pct == 50.0
+
+    def test_buying_power_pct_zero_when_no_nav(self):
+        """Edge case: total_value=0 → buying_power_used_pct=0 (no div-by-zero)."""
+        client = self._mock_schwab_client()  # all zeros default
+        snapshot = LiveSnapshotBuilder(client).build()
+        assert snapshot.buying_power_used_pct == 0.0
+
+    def test_pnl_daily_summed_from_positions(self):
+        """D-λ: pnl_daily_usd = sum positions[].unrealized_pnl."""
+        positions = [
+            {"symbol": "SPY", "asset_class": "EQUITY", "quantity": 100.0,
+             "market_value": 45000.0, "average_price": 450.0, "unrealized_pnl": 500.0},
+            {"symbol": "QQQ", "asset_class": "EQUITY", "quantity": 50.0,
+             "market_value": 20000.0, "average_price": 400.0, "unrealized_pnl": -100.0},
+        ]
+        client = self._mock_schwab_client(positions=positions)
+        snapshot = LiveSnapshotBuilder(client).build()
+        assert snapshot.pnl_daily_usd == Decimal("400.0")  # 500 + (-100)
+
+    def test_empty_positions_zero_pnl(self):
+        """No positions → pnl_daily_usd = Decimal(0)."""
+        client = self._mock_schwab_client(positions=[])
+        snapshot = LiveSnapshotBuilder(client).build()
+        assert snapshot.pnl_daily_usd == Decimal("0")
+
+    def test_phase_1_defaults_zero(self):
+        """D-θ + D-κ: portfolio_beta + pnl_weekly/monthly + drawdown = 0.0."""
+        client = self._mock_schwab_client()
+        snapshot = LiveSnapshotBuilder(client).build()
+        assert snapshot.portfolio_beta == 0.0
+        assert snapshot.pnl_daily_pct == 0.0
+        assert snapshot.pnl_weekly_pct == 0.0
+        assert snapshot.pnl_monthly_pct == 0.0
+        assert snapshot.drawdown_from_peak_pct == 0.0
+
+    def test_snapshot_at_utc(self):
+        """snapshot_at populated UTC datetime + snapshot_id non-empty sha256."""
+        client = self._mock_schwab_client()
+        snapshot = LiveSnapshotBuilder(client).build()
+        assert snapshot.snapshot_at.tzinfo is not None
+        assert snapshot.snapshot_id  # non-empty
+        assert len(snapshot.snapshot_id) == 64  # sha256 hex

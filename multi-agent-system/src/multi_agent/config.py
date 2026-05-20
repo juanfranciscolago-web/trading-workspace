@@ -89,6 +89,20 @@ class Settings(BaseSettings):
     #                     safe_init_auth_v2.py.
     USE_SCHWAB_DATA_LAYER: bool = False
 
+    # ADR-013 D10: ATLAS live portfolio integration flag (Sprint 11 atlas-d).
+    # False (default) = DB-backed SnapshotBuilder (synthetic). True =
+    # LiveSnapshotBuilder reads via SchwabClient.get_positions + get_balances.
+    # Independent from USE_SCHWAB_DATA_LAYER (ATHENA market data vs ATLAS
+    # portfolio reads decoupled).
+    USE_LIVE_PORTFOLIO: bool = False
+
+    # ADR-013 D9-1: Explicit Schwab account_id for multi-agent subaccount
+    # isolation (Sprint 11 atlas-d). Empty string default = SchwabClient
+    # auto-discovery picks first account (Eolo behavior preserved). Set
+    # explicit = multi-agent uses specified paper subaccount, distinct from
+    # Eolo bots' subaccount within same Schwab parent account.
+    SCHWAB_ACCOUNT_ID: str = ""
+
     # ── HIGH priority: fail-fast at startup (raise = process cannot start) ───
 
     @field_validator("DATABASE_URL")

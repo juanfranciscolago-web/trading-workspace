@@ -267,3 +267,123 @@ class CachedSnapshotBuilder:
     def invalidate(self) -> None:
         """Force refresh on next get()."""
         self._cached = None
+
+
+# ── Live builder (ADR-013 D6, Sprint 11 atlas-d) ──────────────────────────────
+
+
+class LiveSnapshotBuilder:
+    """Build PortfolioSnapshot from live Schwab broker reads (ADR-013 D6).
+
+    Alongside existing DB-backed SnapshotBuilder (synthetic mode). Lifespan
+    selects which based on Settings.USE_LIVE_PORTFOLIO flag (D10). Same
+    PortfolioSnapshot return contract → ATLAS engine consumes identically.
+
+    Phase 1 simplifications (Sprint 11 atlas-d sub-decisions Camino 2):
+    - D-η: Greeks (delta, vega, theta) default Decimal(0). Schwab positions
+      response does NOT return greeks. Tech debt Sprint 12+: cross-source
+      from iv_surface or options chain on-demand.
+    - D-θ: PnL weekly/monthly + drawdown default 0.0. Require historical
+      snapshots accumulation. Tech debt Sprint 12+ separate table.
+    - D-ι-A: symbol field used as ticker raw (no OCC parser Phase 1). For
+      OPTION positions, ticker = full OCC string. ATLAS validates per
+      asset_class. Tech debt Sprint 12+ ticker normalization.
+    - D-κ: portfolio_beta default 0.0 (no benchmark source Phase 1).
+    - D-λ: pnl_daily_usd = sum positions[].unrealized_pnl (Schwab
+      currentDayProfitLoss per position).
+    """
+
+    def __init__(self, schwab_client) -> None:
+        """Init LiveSnapshotBuilder.
+
+        Args:
+            schwab_client: SchwabClient instance (account_id pre-configured
+                via __init__ per D9 + D9-1 subaccount isolation).
+        """
+        self._schwab_client = schwab_client
+
+    def build(self) -> PortfolioSnapshot:
+        """Read live Schwab portfolio + return PortfolioSnapshot.
+
+        Calls SchwabClient.get_positions() + get_balances() (Sprint 11
+        atlas-b/c ports). Maps Schwab normalized shapes → PositionView +
+        PortfolioSnapshot aggregates.
+
+        Returns:
+            PortfolioSnapshot con positions tuple + aggregate fields.
+
+        Raises:
+            SchwabAPIError: si broker reads fail (propagated). Caller
+                (CachedSnapshotBuilder) provides stale data fallback.
+        """
+        positions_raw = self._schwab_client.get_positions()
+        balances = self._schwab_client.get_balances()
+
+        # Map positions → PositionView tuple (D-η + D-ι-A).
+        position_views = tuple(
+            self._map_position_to_view(p) for p in positions_raw
+        )
+
+        # Aggregate balances + derived fields.
+        total_value = Decimal(str(balances.get("total_value", 0.0)))
+        cash = Decimal(str(balances.get("cash", 0.0)))
+        buying_power = balances.get("buying_power", 0.0)
+
+        # D-λ: pnl_daily_usd = sum positions unrealized_pnl.
+        pnl_daily_usd = Decimal(
+            str(sum(p.get("unrealized_pnl", 0.0) for p in positions_raw))
+        )
+
+        # buying_power_used_pct: (1 - bp/total) * 100, guard div-by-zero.
+        if float(total_value) > 0:
+            buying_power_used_pct = (
+                1.0 - (buying_power / float(total_value))
+            ) * 100.0
+        else:
+            buying_power_used_pct = 0.0
+
+        # vega_total: sum positions[].vega (all Decimal(0) Phase 1 per D-η).
+        vega_total = float(sum(p.vega for p in position_views))
+
+        # snapshot_at + snapshot_id (per existing snapshot_hash signature).
+        snapshot_at = datetime.now(timezone.utc)
+        snapshot_id = snapshot_hash(
+            position_views,
+            cash,
+            pnl_daily_usd,
+            snapshot_at,
+        )
+
+        return PortfolioSnapshot(
+            positions=position_views,
+            nav_usd=total_value,
+            cash_usd=cash,
+            buying_power_used_pct=buying_power_used_pct,
+            portfolio_beta=0.0,  # D-κ Phase 1 default
+            vega_total=vega_total,
+            pnl_daily_usd=pnl_daily_usd,
+            pnl_daily_pct=0.0,  # D-θ Phase 1 default
+            pnl_weekly_pct=0.0,  # D-θ Phase 1 default
+            pnl_monthly_pct=0.0,  # D-θ Phase 1 default
+            drawdown_from_peak_pct=0.0,  # D-θ Phase 1 default
+            snapshot_at=snapshot_at,
+            snapshot_id=snapshot_id,
+        )
+
+    @staticmethod
+    def _map_position_to_view(raw: dict) -> PositionView:
+        """Map Schwab normalized position dict → PositionView.
+
+        D-η: Greeks default Decimal(0) (Schwab no returns greeks).
+        D-ι-A: symbol raw as ticker (no OCC parser Phase 1).
+        """
+        return PositionView(
+            ticker=raw.get("symbol", ""),  # D-ι-A: symbol raw
+            asset_class=raw.get("asset_class", "UNKNOWN"),
+            strategy_type=None,  # NOT en Schwab Phase 1
+            market_value_usd=Decimal(str(raw.get("market_value", 0.0))),
+            quantity=int(raw.get("quantity", 0)),  # float → int cast
+            delta=Decimal(0),  # D-η Phase 1 default
+            vega=Decimal(0),  # D-η Phase 1 default
+            theta=Decimal(0),  # D-η Phase 1 default
+        )
