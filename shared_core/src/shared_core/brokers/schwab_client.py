@@ -78,6 +78,44 @@ class RateLimiter:
         self.call_times.append(now)
 
 
+def _normalize_position(raw: dict) -> dict:
+    """Normalize Schwab position dict to multi-agent canonical shape.
+
+    ADR-013 D-δ: quantity = longQuantity - shortQuantity (signed convention).
+    ADR-013 D-γ: asset class agnostic, OPTION-specific fields conditional.
+
+    Args:
+        raw: Schwab API position dict from securitiesAccount.positions[].
+
+    Returns:
+        Normalized dict con keys: symbol, asset_class, quantity (signed),
+        average_price, market_value, unrealized_pnl. Plus OPTION-specific
+        (option_type, strike, expiration) si assetType == "OPTION".
+    """
+    instrument = raw.get("instrument", {})
+    asset_type = instrument.get("assetType", "UNKNOWN")
+
+    long_qty = float(raw.get("longQuantity", 0))
+    short_qty = float(raw.get("shortQuantity", 0))
+    quantity = long_qty - short_qty
+
+    normalized = {
+        "symbol": instrument.get("symbol", ""),
+        "asset_class": asset_type,
+        "quantity": quantity,
+        "average_price": float(raw.get("averagePrice", 0)),
+        "market_value": float(raw.get("marketValue", 0)),
+        "unrealized_pnl": float(raw.get("currentDayProfitLoss", 0)),
+    }
+
+    if asset_type == "OPTION":
+        normalized["option_type"] = instrument.get("putCall", "")  # "PUT" or "CALL"
+        normalized["strike"] = float(instrument.get("strikePrice", 0))
+        normalized["expiration"] = instrument.get("expirationDate", "")
+
+    return normalized
+
+
 class SchwabClient:
     """
     Unified Schwab API client.
@@ -102,6 +140,7 @@ class SchwabClient:
     OAUTH_TOKEN_URL = "https://api.schwabapi.com/v1/oauth/token"
     PRICE_HISTORY_URL = "https://api.schwabapi.com/marketdata/v1/pricehistory"
     CHAINS_URL = "https://api.schwabapi.com/marketdata/v1/chains"
+    TRADER_BASE_URL = "https://api.schwabapi.com/trader/v1"
     DEFAULT_STRIKE_COUNT = 20
     DEFAULT_OPTIONS_CONTRACT_TYPE = "ALL"
     DEFAULT_OPTIONS_STRATEGY = "SINGLE"
@@ -113,11 +152,26 @@ class SchwabClient:
         credentials: SchwabCredentials,
         paper_trading: bool = True,
         rate_limit_per_second: int = 5,
+        account_id: str | None = None,
     ):
+        """Init SchwabClient.
+
+        Args:
+            credentials: SchwabCredentials with api_key/api_secret + tokens.
+            paper_trading: True (default) for paper subaccount, False for live.
+            rate_limit_per_second: RateLimiter throttle (default 5/sec Schwab cap).
+            account_id: Optional Schwab account number explicit (ADR-013 D9 + D9-1).
+                If None (default), get_account_id() auto-discovers via GET
+                /trader/v1/accounts picking first (Eolo behavior). If set,
+                multi-agent uses specified subaccount (D9 isolation, no Eolo
+                conflation).
+        """
         self.credentials = credentials
         self.paper_trading = paper_trading
         self.rate_limiter = RateLimiter(rate_limit_per_second)
         self._http_client = None  # Initialize lazily
+        # ADR-013 D9-1: cached explicit account_id (None until discovered).
+        self._account_id: str | None = account_id
         # Per-instance lock prevents two threads from racing on refresh; the
         # second POST would invalidate the first's tokens (Schwab rotates).
         self._refresh_lock = threading.Lock()
@@ -143,6 +197,7 @@ class SchwabClient:
         *,
         paper_trading: bool = True,
         rate_limit_per_second: int = 5,
+        account_id: str | None = None,
     ) -> "SchwabClient":
         """Construct SchwabClient using GCP-backed credentials.
 
@@ -204,6 +259,7 @@ class SchwabClient:
             credentials=creds,
             paper_trading=paper_trading,
             rate_limit_per_second=rate_limit_per_second,
+            account_id=account_id,
         )
 
     # -------------------------------------------------------------------------
@@ -679,13 +735,126 @@ class SchwabClient:
     # Account state
     # -------------------------------------------------------------------------
 
-    def get_positions(self) -> list[dict]:
-        """Get all open positions in the account."""
+    def get_account_id(self) -> str:
+        """Return cached account_id or discover via GET /trader/v1/accounts.
+
+        ADR-013 D9 + D9-1: If account_id was set explicit en __init__ (multi-agent
+        subaccount isolation), return cached value. Otherwise discover via Schwab
+        API picking first account (Eolo behavior preserved for default deployments).
+
+        Pattern ported from Eolo's options_trader.py get_account_id() — adapted to
+        httpx (vs requests) + SchwabAPIError (vs ValueError) for SchwabClient
+        contract consistency.
+
+        Returns:
+            Schwab account number (string).
+
+        Raises:
+            SchwabAPIError: si HTTP non-200, empty accounts list, o missing
+                accountNumber field.
+            SchwabAuthError: si 401 retry path's _refresh_access_token also fails.
+        """
+        if self._account_id is not None:
+            return self._account_id
+
         self._ensure_authenticated()
         self.rate_limiter.wait_if_needed()
 
-        # TODO: Port from Eolo
-        raise NotImplementedError("Port from Eolo: get_positions")
+        url = f"{self.TRADER_BASE_URL}/accounts"
+        headers = {"Authorization": f"Bearer {self.credentials.access_token}"}
+
+        for attempt in range(2):  # ADR-013 D-ε: 401 retry pattern
+            try:
+                response = httpx.get(url, headers=headers, timeout=10)
+            except httpx.RequestError as e:
+                raise SchwabAPIError(f"get_account_id request failed: {e}") from e
+
+            if response.status_code == 401 and attempt == 0:
+                logger.warning("Schwab /accounts 401 — refreshing token and retrying")
+                self._refresh_access_token()
+                headers = {"Authorization": f"Bearer {self.credentials.access_token}"}
+                continue
+
+            if response.status_code != 200:
+                raise SchwabAPIError(
+                    f"get_account_id: HTTP {response.status_code} — {response.text[:200]}"
+                )
+
+            accounts = response.json()
+            if not accounts or not isinstance(accounts, list):
+                raise SchwabAPIError(
+                    f"get_account_id: empty or invalid accounts response: {accounts!r}"
+                )
+
+            first = accounts[0]
+            sa = first.get("securitiesAccount", {})
+            account_number = sa.get("accountNumber")
+            if not account_number:
+                raise SchwabAPIError(
+                    f"get_account_id: missing accountNumber in {first!r}"
+                )
+
+            self._account_id = str(account_number)
+            logger.info("Schwab account discovered: %s", self._account_id)
+            return self._account_id
+
+        raise SchwabAPIError("get_account_id: exhausted retries")  # defensive
+
+    def get_positions(self) -> list[dict]:
+        """Return normalized positions list for cached/discovered account.
+
+        ADR-013 D-γ agnostic: NO OPTION-only filter (vs Eolo). Returns ALL asset
+        classes — equities, options, futures, etc. ATLAS PositionView validates
+        per asset_class downstream (separation of concerns).
+
+        ADR-013 D-δ signed quantity: quantity = longQuantity - shortQuantity
+        (Schwab returns both as positive; signed convention aligns con PositionView).
+
+        Pattern ported from Eolo's options_trader.py get_positions() — adapted to
+        sync httpx + asset-class-agnostic normalization.
+
+        Returns:
+            List of dicts con normalized keys: symbol, asset_class, quantity
+            (signed), average_price, market_value, unrealized_pnl. Option-specific
+            keys (option_type, strike, expiration) conditional si OPTION.
+            Empty list si no positions.
+
+        Raises:
+            SchwabAPIError: si HTTP error o malformed response.
+            SchwabAuthError: si 401 retry path fails.
+        """
+        account_id = self.get_account_id()
+        self._ensure_authenticated()
+        self.rate_limiter.wait_if_needed()
+
+        url = f"{self.TRADER_BASE_URL}/accounts/{account_id}"
+        params = {"fields": "positions"}
+        headers = {"Authorization": f"Bearer {self.credentials.access_token}"}
+
+        for attempt in range(2):  # ADR-013 D-ε: 401 retry pattern
+            try:
+                response = httpx.get(url, headers=headers, params=params, timeout=10)
+            except httpx.RequestError as e:
+                raise SchwabAPIError(f"get_positions request failed: {e}") from e
+
+            if response.status_code == 401 and attempt == 0:
+                logger.warning("Schwab /accounts/%s 401 — refreshing token and retrying", account_id)
+                self._refresh_access_token()
+                headers = {"Authorization": f"Bearer {self.credentials.access_token}"}
+                continue
+
+            if response.status_code != 200:
+                raise SchwabAPIError(
+                    f"get_positions: HTTP {response.status_code} — {response.text[:200]}"
+                )
+
+            data = response.json()
+            sa = data.get("securitiesAccount", {})
+            positions_raw = sa.get("positions", [])
+
+            return [_normalize_position(p) for p in positions_raw]
+
+        raise SchwabAPIError("get_positions: exhausted retries")  # defensive
 
     def get_balances(self) -> dict:
         """
