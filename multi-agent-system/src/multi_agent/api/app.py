@@ -101,6 +101,74 @@ def _select_data_layer(
         return data_layer
 
 
+def _build_snapshot_builder(settings_obj: Settings, pool):
+    """Construct snapshot builder per USE_LIVE_PORTFOLIO flag (ADR-013 D6 + D7).
+
+    USE_LIVE_PORTFOLIO=False (default) → DB-backed SnapshotBuilder + TTL 5s.
+    USE_LIVE_PORTFOLIO=True → LiveSnapshotBuilder via SchwabClient + TTL 30s.
+
+    Fail-fast contract (ADR-013 D-ν STRENGTHENED + D-ο):
+    - If USE_LIVE_PORTFOLIO=True but SCHWAB_ACCOUNT_ID="" → ValueError
+      (refuse to start). Auto-discovery would silently use Eolo's subaccount,
+      causing position conflation. ADR-013 D9 requires explicit subaccount.
+    - If USE_LIVE_PORTFOLIO=True and SchwabClient.from_gcp() fails → propagate
+      (mirror _select_data_layer pattern).
+
+    Args:
+        settings_obj: Settings instance with USE_LIVE_PORTFOLIO + SCHWAB_ACCOUNT_ID.
+        pool: PostgresPool for DB-backed SnapshotBuilder fallback path.
+
+    Returns:
+        CachedSnapshotBuilder wrapping either LiveSnapshotBuilder (live mode) or
+        SnapshotBuilder (synthetic mode).
+
+    Raises:
+        ValueError: si USE_LIVE_PORTFOLIO=True pero SCHWAB_ACCOUNT_ID="" (ADR-013 D-ο).
+        Exception: GCP/Firestore credentials issues si USE_LIVE_PORTFOLIO=True.
+    """
+    # Lazy import to avoid top-level circular issues + match _lifespan style.
+    from multi_agent.risk.portfolio_snapshot import (
+        CachedSnapshotBuilder,
+        LiveSnapshotBuilder,
+        SnapshotBuilder,
+    )
+
+    if settings_obj.USE_LIVE_PORTFOLIO:
+        # ADR-013 D-ο fail-fast: explicit account_id REQUIRED.
+        if not settings_obj.SCHWAB_ACCOUNT_ID:
+            raise ValueError(
+                "USE_LIVE_PORTFOLIO=True requires SCHWAB_ACCOUNT_ID explicit "
+                "(ADR-013 D9 subaccount isolation). Auto-discovery would "
+                "silently use Eolo's subaccount, causing position conflation. "
+                "Set SCHWAB_ACCOUNT_ID env var to your multi-agent paper "
+                "subaccount number, or set USE_LIVE_PORTFOLIO=False to use "
+                "DB-backed SnapshotBuilder."
+            )
+
+        from shared_core.brokers.schwab_client import SchwabClient
+
+        try:
+            schwab_client = SchwabClient.from_gcp(
+                account_id=settings_obj.SCHWAB_ACCOUNT_ID,
+            )
+            live_builder = LiveSnapshotBuilder(schwab_client)
+            logger.info(
+                "ATLAS LiveSnapshotBuilder active (account_id=%s, TTL=30s)",
+                settings_obj.SCHWAB_ACCOUNT_ID,
+            )
+            return CachedSnapshotBuilder(live_builder, ttl_seconds=30.0)
+        except Exception:
+            logger.exception(
+                "USE_LIVE_PORTFOLIO=True but LiveSnapshotBuilder construction "
+                "failed. Refusing to start. Set USE_LIVE_PORTFOLIO=False to "
+                "fall back to DB-backed SnapshotBuilder."
+            )
+            raise
+
+    # Default path: DB-backed (current behavior preserved).
+    return CachedSnapshotBuilder(SnapshotBuilder(pool), ttl_seconds=5.0)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Initialize shared resources on startup; close on shutdown."""
@@ -108,7 +176,11 @@ async def _lifespan(app: FastAPI):
     from claude_router.router import ClaudeRouter
     from shared_core.storage.postgres_pool import PostgresPool
     from multi_agent.risk.config import load_buckets, load_limits
-    from multi_agent.risk.portfolio_snapshot import CachedSnapshotBuilder, SnapshotBuilder
+    from multi_agent.risk.portfolio_snapshot import (
+        CachedSnapshotBuilder,
+        LiveSnapshotBuilder,
+        SnapshotBuilder,
+    )
     from multi_agent.observability.llm_cost_repository import LLMCostRepository
     from multi_agent.persistence.system_repository import SystemRepository
     from multi_agent.alerts.bus import AlertBus
@@ -137,7 +209,7 @@ async def _lifespan(app: FastAPI):
     app.state.pool = pool
     app.state.limits = load_limits()
     app.state.buckets = load_buckets()
-    app.state.snapshot_builder = CachedSnapshotBuilder(SnapshotBuilder(pool), ttl_seconds=5.0)
+    app.state.snapshot_builder = _build_snapshot_builder(settings, pool)
     app.state.cost_repo = LLMCostRepository(pool)
     app.state.startup_time = datetime.now(timezone.utc)
     logger.info("✓ DB pool ready (min=%d max=%d)", settings.DB_POOL_MIN, settings.DB_POOL_MAX)
