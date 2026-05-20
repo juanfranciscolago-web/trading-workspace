@@ -857,17 +857,73 @@ class SchwabClient:
         raise SchwabAPIError("get_positions: exhausted retries")  # defensive
 
     def get_balances(self) -> dict:
-        """
-        Get account balances.
+        """Return normalized account balances dict.
+
+        ADR-013 D5-C: separate endpoint GET /trader/v1/accounts/{id} (no fields
+        param). Parse securitiesAccount.currentBalances → 5-key dict normalized.
+
+        NO Eolo precedent (F-r2 ADR-013 catch). Schwab API docs source. Field
+        names per Schwab documentation; verification deferred to integration test
+        gate (Sprint 11+ production runs).
+
+        ADR-013 D-ζ defensive float conversion: float(value or 0) handles both
+        missing keys and explicit None values from Schwab response.
 
         Returns:
-            dict with: cash, buying_power, margin_used, total_value, etc.
+            Dict with 5 keys (all float):
+            - cash: cashBalance from Schwab response.
+            - buying_power: buyingPower.
+            - total_value: liquidationValue.
+            - margin_used: marginBalance.
+            - day_trading_buying_power: dayTradingBuyingPower.
+
+        Raises:
+            SchwabAPIError: si HTTP error o malformed response.
+            SchwabAuthError: si 401 retry path's _refresh_access_token fails.
         """
+        account_id = self.get_account_id()
         self._ensure_authenticated()
         self.rate_limiter.wait_if_needed()
 
-        # TODO: Port from Eolo
-        raise NotImplementedError("Port from Eolo: get_balances")
+        url = f"{self.TRADER_BASE_URL}/accounts/{account_id}"
+        headers = {"Authorization": f"Bearer {self.credentials.access_token}"}
+
+        for attempt in range(2):  # ADR-013 D-ε: 401 retry pattern
+            try:
+                response = httpx.get(url, headers=headers, timeout=10)
+            except httpx.RequestError as e:
+                raise SchwabAPIError(f"get_balances request failed: {e}") from e
+
+            if response.status_code == 401 and attempt == 0:
+                logger.warning(
+                    "Schwab /accounts/%s 401 — refreshing token and retrying",
+                    account_id,
+                )
+                self._refresh_access_token()
+                headers = {"Authorization": f"Bearer {self.credentials.access_token}"}
+                continue
+
+            if response.status_code != 200:
+                raise SchwabAPIError(
+                    f"get_balances: HTTP {response.status_code} — {response.text[:200]}"
+                )
+
+            data = response.json()
+            sa = data.get("securitiesAccount", {})
+            balances = sa.get("currentBalances", {})
+
+            # ADR-013 D-ζ: defensive None-coalesce float conversion.
+            return {
+                "cash": float(balances.get("cashBalance") or 0),
+                "buying_power": float(balances.get("buyingPower") or 0),
+                "total_value": float(balances.get("liquidationValue") or 0),
+                "margin_used": float(balances.get("marginBalance") or 0),
+                "day_trading_buying_power": float(
+                    balances.get("dayTradingBuyingPower") or 0
+                ),
+            }
+
+        raise SchwabAPIError("get_balances: exhausted retries")  # defensive
 
     # -------------------------------------------------------------------------
     # Order management
