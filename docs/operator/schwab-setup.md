@@ -554,7 +554,111 @@ SELECT
 
 ---
 
-## Section 9 — Future Work / Tech debt
+## Section 9 — Phase 2 Consumer Surface Reads (Sprint 10 onwards)
+
+Phase 2 consumer surface UNIFIED (ADR-009, S.10.cons-X) extends ATHENA's
+MarketState with term_structure + surface + ohlcv_intraday fields. SchwabDataLayer
+reads from IvSurfaceRepository + OhlcvRepository per snapshot, assembles
+extended TickerSnapshot, ATHENA prompt interprets fields per D5 semantics.
+
+### 9.1 Overview: producer/consumer pair completion
+
+Sprint 7 iv_surface WRITE (S.7.surf-c) + Sprint 9 market.ohlcv WRITE (S.9.ohl-b)
+created accumulation foundation. Sprint 10 (this) completes producer/consumer
+pair adding READ-side wiring + ATHENA prompt semantics.
+
+Per ADR-009 D4 + sub-decisions D4-1/D4-2/D4-3:
+
+- **Reads per snapshot**: ~30 reads/snapshot (6 tickers × (1 surface + 4 timeframes)
+  + 12 existing API calls = 18 DB reads + 12 Schwab API).
+- **D4-1 delta bucketing**: ATM |delta| ∈ [45, 55], put_25d |delta| ∈ [20, 30] PUT,
+  call_25d delta ∈ [20, 30] CALL. Avg IV per bucket.
+- **D4-2 timeframe lookbacks**: TIMEFRAME_LOOKBACK_BARS = {5m: 78, 15m: 96,
+  30m: 48, 1d: 30}.
+- **D4-3 D-γ isolation**: per-cell errors logged WARNING + skip (mirror S.7.surf-c).
+
+### 9.2 Repository wiring + lifespan
+
+Lifespan (`app.py`) constructs OhlcvRepository early (line ~180) alongside
+IvHistoryRepository + IvSurfaceRepository. Shared instances passed to:
+- SchwabDataLayer constructor (iv_surface_repo + ohlcv_repo per Sprint 10).
+- IvHistoryWorker (S.7.surf-c, iv_surface_repo Phase 1 write-only).
+- OhlcvWorker (S.9.ohl-b, ohlcv_repo write).
+
+Repository sharing eliminates doble construcción tech debt (ADR-005 §9.3 #1
+partial — Schwab client still doble per worker).
+
+### 9.3 TickerSnapshot Phase 2 fields
+
+3 new fields per ADR-009 D2-1/D2-2/D2-3 (mirror iv_rank D5 progressive disclosure):
+
+```python
+@dataclass(frozen=True)
+class TickerSnapshot:
+    # ... existing 8 fields ...
+    term_structure: list[tuple[int, float]] = field(default_factory=list)
+    surface: dict[int, list[float]] = field(default_factory=dict)
+    ohlcv_intraday: dict[str, list[OHLCV]] = field(default_factory=dict)
+```
+
+- `term_structure`: list[(DTE, atm_iv_proxy)] ordered front-to-back.
+- `surface`: dict[DTE → [atm_iv, put_25d_iv, call_25d_iv]] per expiration.
+- `ohlcv_intraday`: dict["5m"/"15m"/"30m"/"1d" → list[OHLCV]].
+
+Backward compat (D7): existing TickerSnapshot constructors unchanged (defaults
+factory). 6 existing test files referencing TickerSnapshot pass sin migration.
+
+### 9.4 ATHENA prompt budget
+
+SYSTEM_PROMPT grew Sprint 10: 3955 → 5228 chars (+32.5% single sub-block).
+Budget guard: 5300 chars (F-r6/F-r6.5 catches Sprint 10 S.10.cons-e).
+
+Token cost: +319 tokens vs original. ATHENA user_prompt JSON 10-30k tokens
+dominates cost (SYSTEM_PROMPT delta = noise). Sprint 11+ telemetry inform
+compression decisions.
+
+### 9.5 Monitoring: SchwabDataLayer Phase 2 logs
+
+**Runtime logs (per snapshot, per ticker, on errors):**
+
+- `WARNING SchwabDataLayer Phase 2: no iv_surface data for TICKER (D4-3 isolation)` —
+  bootstrap phase, surface NOT populated yet.
+- `WARNING SchwabDataLayer Phase 2: iv_surface read failed for TICKER (D4-3 isolation),
+  continuing` — DB error isolated, ATHENA continues con empty defaults.
+- `WARNING SchwabDataLayer Phase 2: ohlcv read failed for TICKER TIMEFRAME
+  (D4-3 isolation), continuing` — per-timeframe error isolated.
+
+**Operator alert filtering**: grep `"D4-3 isolation"` to filter Phase 2 read
+failures from critical errors.
+
+### 9.6 SQL monitoring queries
+
+Verificar Phase 2 reads health:
+
+```sql
+-- Latest surface per ticker (D3 get_latest_surface canonical query)
+SELECT underlying, MAX(ts) AS latest_surface_ts
+FROM market.iv_surface
+GROUP BY underlying;
+
+-- Surface row count per ticker latest snapshot (D3 get_surface_for_ticker)
+SELECT underlying, COUNT(*) AS contracts
+FROM market.iv_surface
+WHERE ts = (SELECT MAX(ts) FROM market.iv_surface WHERE underlying = 'SPY')
+  AND underlying = 'SPY';
+
+-- ohlcv_intraday lookback verification (D4-2 TIMEFRAME_LOOKBACK_BARS)
+SELECT ticker, timeframe, COUNT(*) AS bars,
+       MIN(ts) AS oldest, MAX(ts) AS newest
+FROM market.ohlcv
+WHERE ticker = 'SPY'
+GROUP BY ticker, timeframe
+ORDER BY timeframe;
+```
+
+---
+
+## Section 10 — Future Work / Tech debt
 
 Items canonical numbered. Cross-reference sources:
 - ADR-005 §9.3 IDs #1-#11 (Sprint 6 tech debt, inherited).

@@ -1,7 +1,7 @@
 # ADR-009: Phase 2 Consumer Surface UNIFIED — TickerSnapshot Extension + Repository READ Path
 
 **Fecha:** 2026-05-19
-**Estado:** Propuesto
+**Estado:** Aceptado (2026-05-19)
 **Contexto:** Sprint 10 LOCKED via S.10.plan-a (commit `40fadca`, 2026-05-19, scoring 3.85/5
 highest). ADR-008 D6 sequencing previously reserved ADR-009 for Schwab WebSocket port —
 **renumber applied atomic en este commit (S.10.cons-a)**: ADR-009 supersedes prior reservation
@@ -233,15 +233,135 @@ Total estimate: ~800 LOC code + ~40 tests + ~400 LOC doc.
 
 ---
 
-## 9. Close-out (S.10.cons-f, pending)
+## 9. Close-out (S.10.cons-f, 2026-05-19)
 
-> Sección se completa en S.10.cons-f. Estructura prevista (mirror ADR-005/006/007 §9):
-> - §9.1 Sub-blocks delivered (S.10.cons-a/b/c/d/e/f con commits + LOC + tests + sign-off dates).
-> - §9.2 Rule #15 findings summary (F-r1 a F-rN + implementation findings).
-> - §9.3 Tech debt registered (deferred Q1-Q5 + 4 inherited RESOLVED).
-> - §9.4 Next steps Sprint 11+ (ADR-010 Schwab WebSocket + ATLAS portfolio adjacent).
-> - Status: Propuesto → Aceptado.
+Sprint 10 Phase 2 consumer surface UNIFIED cerrado al 100% (7/7 sub-blocks
+delivered + close-out atomic). ADR-009 status: Propuesto → Aceptado. Producer/
+consumer pair foundation complete: Sprint 7 iv_surface WRITE + Sprint 9
+ohlcv WRITE + Sprint 10 UNIFIED READ. 4 inherited tech debt items resolved
+atomically (ADR-005 §9.3 #2 + ADR-006 D6-1 + ADR-007 §9.3 #4 + S.9 §5).
+
+### 9.1 Sub-blocks delivered
+
+| Sub-block | Date | Commit | LOC delta | Tests delta | Description |
+|-----------|------|--------|-----------|-------------|-------------|
+| S.10.plan-a | 2026-05-19 | `40fadca` | +167 (doc) | 0 | Sprint 10+ priority analysis, Phase 2 UNIFIED locked |
+| S.10.cons-a | 2026-05-19 | `9267be5` | +286 (doc) | 0 | ADR-009 plan firmado + ADR-008 full renumber atomic |
+| S.10.cons-b | 2026-05-19 | `646efc2` | +326 (code+tests) | +15 | IvSurfaceRepository READ methods (3 new) + 15 tests |
+| S.10.cons-c | 2026-05-19 | `0b7786d` | +237 (code+tests) | +15 | TickerSnapshot extension (3 new fields) + 15 tests |
+| S.10.cons-c-fix | 2026-05-19 | `c19c74d` | +20/-12 (drift fix) | 0 (renamed 2) | F-r5 catch: surface semantic align ADR-009 D2-2 canonical |
+| S.10.cons-d | 2026-05-19 | `1cbdce1` | +380 (code+tests) | +10 | SchwabDataLayer Phase 2 extension + D4-1/D4-2/D4-3 |
+| S.10.cons-e | 2026-05-19 | `15fc94d` | +65 (code+tests) | +5 | ATHENA prompt Phase 2 semantics + budget 5300 chars |
+| S.10.cons-f | 2026-05-19 | (this) | ~+395 (doc) | 0 | ADR-009 close-out + operator §9 + daily log + Status Aceptado |
+| **Total** | — | — | **~1,876** | **+45** | — |
+
+Tests baseline final: **996 passing** (multi-agent 901 + shared_core 95) + 1
+integration test skipped by design (vs baseline pre-Sprint-10 era 951 + 1).
+Net +45 tests for Phase 2 consumer surface.
+
+### 9.2 Rule #15 findings summary
+
+Pre-recolección rule #15 strict + Camino 2 protocol disparó **7 findings críticos**
+across stage. Distribución:
+
+- **S.10.plan-a (1)**: Scope unification detection — Sprint 9 §9.3 cross-ref reveló
+  Phase 2 unifica iv_surface READ + market.ohlcv consumer + TickerSnapshot extension
+  (vs ATHENA-only original framing).
+- **S.10.cons-a (1)**: F-r1 ADR-008 partial renumber inconsistency catch — full
+  atomic renumber 15 refs reverse order prevented downstream cascade.
+- **S.10.cons-b (1)**: D3-1 spot price absent en V007 → weighted AVG(iv × OI) proxy
+  Phase 1 (vs cross-table join coupling).
+- **S.10.cons-c (3)**: F-r2 asdict() tuple preservation needs explicit list() conversion +
+  F-r3 nested OHLCV timestamps double-loop iteration + F-r4 surface int keys → str
+  for JSON compat. F-r1 path catch (types.py spec vs interfaces.py reality).
+- **S.10.cons-c-fix (1)**: F-r5 surface semantic drift — S.10.cons-c interpretation
+  delta-bucketed vs ADR-009 D2-2 canonical DTE-keyed. Caught vía S.10.cons-d
+  pre-recolección reviewing D2-2 verbatim. Critical pre-Write catch prevented
+  ATHENA prompt downstream inheriting drift.
+- **S.10.cons-d (0 new findings)**: implementation followed D4 pseudocode verbatim.
+- **S.10.cons-e (2)**: F-r6 prompt budget exhaustion 99% capacity pre-Write +
+  F-r6.5 budget reality measurement post-Write (+1273 chars actual vs +800-1100
+  estimate). Budget 4000 → 4500 → 5300 trajectory.
+
+Most impactful catches across stage:
+
+- **F-r5 (S.10.cons-c-fix) CRITICAL**: Semantic drift surface field entre ADR
+  canonical y impl. Pattern: Camino 2 protocol (Claude-driven design) accidentally
+  diverges ADR canonical. Catch saved ATHENA prompt downstream cascade. Lesson:
+  pre-recolección must include ADR verbatim re-read on each sub-block.
+- **F-r6/F-r6.5 (S.10.cons-e) CRITICAL pair**: Estimate vs reality gap 16% on
+  prompt budget. Pre-Write F-r6 caught 99% capacity; post-Write F-r6.5 caught
+  +1273 actual chars beat +800-1100 estimate. Pattern: pre-Write estimates +
+  post-Write measurements both required for accurate budget management.
+- **F-r1 (S.10.cons-a) CRITICAL**: ADR-008 full renumber 15 refs reverse order
+  prevented downstream maintenance burden. Demonstrates discipline of consistent
+  numbering en Aceptado canonical docs.
+
+**Pattern observado:** Cada rule #15 firing saved 10-30 min de speculative
+implementation. F-r5 alone saved ~1.5 días downstream debugging (ATHENA
+prompt drift across S.10.cons-e + downstream sprints). Cumulative protocol
+value substantial.
+
+### 9.3 Tech debt registered for Sprint 11+
+
+Canonical numbered list — operator doc `docs/operator/schwab-setup.md` §9
+"Phase 2 Consumer Surface Reads" cross-refs estos IDs.
+
+1. **Surface representation full grid expansion**: Q1 deferred. Phase 1 =
+   delta-sampled (D2-2 + D4-1). Trigger Phase 2: ATHENA GEX compute requires
+   full grid (ADR-011 scope intersection).
+2. **ohlcv_intraday timeframe configurability**: Q2 deferred. Phase 1 = all 4
+   atomic (5m/15m/30m/1d). Trigger configurability: token budget pressure
+   observed via paper trading telemetry.
+3. **Multi-snapshot intraday surface aggregation**: Q3 deferred. Phase 1 =
+   max ts (D3 get_latest_surface). Trigger refinement: multi-snapshot
+   intraday divergence detection useful signal.
+4. **Cache TTL para 30-read snapshot impact**: Q4 deferred. Phase 1 = no cache.
+   Trigger Phase 1.5 caching: latency p99 > 500ms observed.
+5. **Schwab API rate limit validation**: Q5 deferred. Phase 1 = reads DB-only,
+   no Schwab calls. Trigger validation: monitor first Sprint 10 production runs.
+6. **Surface ATM-exact resolution**: D3-1 proxy weighted AVG(iv × OI) vs spot-
+   anchored. Trigger: paper trading signal quality degradation.
+7. **ATHENA prompt budget trajectory monitoring**: F-r6/F-r6.5 catches. Budget
+   growth 4000 → 5300 (+32.5% single sub-block). Sprint 11+ telemetry inform
+   future compression decisions data-driven.
+
+Inherited cross-ref RESOLVED Sprint 10:
+- **ADR-005 §9.3 #2** (`market.iv_surface` populating) — RESOLVED Sprint 7 (write)
+  + Sprint 10 (read via S.10.cons-b/d). FULLY CLOSED.
+- **ADR-006 D6-1** (TickerSnapshot extension Phase 2) — RESOLVED Sprint 10 S.10.cons-c.
+- **ADR-007 §9.3 #4** (Backtest depth Q4 trigger Phase 2) — RESOLVED Sprint 10
+  S.10.cons-d ohlcv_intraday wiring.
+- **S.9 §5** (Consumer-side reading patterns Sprint 10 candidate) — RESOLVED Sprint 10.
+
+### 9.4 Next steps Sprint 11+
+
+ADR-009 Aceptado triggers Sprint 11 priority re-score per S.10.plan-a TENTATIVE
+caveat (rule #15: verify reality before spec).
+
+Sprint 11 candidates (per ADR-008 §9.4 + Sprint 10 lessons):
+
+- **#7 ATLAS portfolio integration** (S.10.plan-a §6 #1 adjacent candidate).
+  Paper trading discipline unblocker, Paper 5/5 + Agent 4/5. Likely Sprint 11 LOCK.
+- **ADR-010 Schwab WebSocket part 1** (Tier D infra) — Sprint 11-12 multi-sprint
+  per ADR-008 D6 + D7. Depends on OhlcvWorker foundation S.9.ohl-b.
+- **Phase 2 telemetry observation** — Sprint 11+ paper trading data
+  informs F-r6.5 budget trajectory + F-r5 ATM proxy quality.
+
+Re-score fresh post-Sprint 10 reflect lessons:
+- Camino 2 protocol producing sustained substantive catches (7 findings Sprint 10).
+- ADR canonical reads pre-Write (mirror F-r5 catch) required discipline.
+- Budget management pre-Write estimate + post-Write reality both required.
+
+Sprint 12+: ADR-011 GEX compute pipeline (Tier A).
+Sprint 13-16+: ADR-012 HERMES real implementation.
+
+Foundation building era continues. Trio ATHENA+APOLLO+ATLAS paper trading
+parallel durante Sprint 11-13 build-out. ATHENA quality Phase 2 unlock now
+operational (term_structure + surface + ohlcv_intraday wired).
 
 ---
 
-> **Próximo sub-bloque:** S.10.cons-b (IvSurfaceRepository READ methods + tests). Inicia tras Juan sign-off plan firmado actual.
+> **Sprint 10 Phase 2 consumer surface cerrado al 100%** (8 commits 19 May 2026).
+> Próximo: Sprint 11 priority analysis re-score, #7 ATLAS portfolio integration
+> probable LOCK.
