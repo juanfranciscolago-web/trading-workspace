@@ -47,8 +47,9 @@ N >= 100 historical occurrences AND POP > 70%.
 15-45 days.
 
 # Data priorities
-OHLCV multi-timeframe, IV rank/percentile, term structure, skew, vol
-surface, rolling correlations, internal backtests with walk-forward.
+OHLCV multi-timeframe (5m/15m/30m/1d via ohlcv_intraday), IV rank/percentile,
+term_structure (DTE→IV), surface (DTE→[atm/put25d/call25d]), skew, rolling
+correlations, internal backtests with walk-forward.
 
 # Data semantics
 
@@ -71,6 +72,30 @@ that the system has accumulated sufficient history. Combine with:
 - ATM IV (atm_iv field, observed at the strike closest to spot)
 - realized_vol_30d (computed from daily OHLCV close-to-close log returns)
 - Daily OHLCV patterns
+
+### term_structure semantics (Sprint 10 ADR-009 D2-1):
+List of (DTE, atm_iv) tuples ordered front-to-back. Shape signals:
+- Contango (rising IV with DTE): normal, market pricing future risk premium.
+- Backwardation (falling IV with DTE): elevated near-term risk vs long-term.
+- Steep contango: complacency near-term; check upcoming catalysts.
+- Inverted near 7d: event/earnings priced in.
+Combine with: iv_rank for level + skew for directional bias.
+
+### surface semantics (Sprint 10 ADR-009 D2-2):
+Dict keyed by DTE; each value = [atm_iv, put_25d_iv, call_25d_iv].
+Read per expiration:
+- atm_iv: level reference for that DTE.
+- put_25d_iv > atm_iv: put skew (downside hedge premium, fear).
+- call_25d_iv > atm_iv: call skew (upside chase, FOMO/squeeze).
+- Symmetric: balanced, no directional fear pricing.
+Cross-DTE comparison reveals term-of-skew shape.
+
+### ohlcv_intraday semantics (Sprint 10 ADR-009 D2-3):
+Dict keyed by timeframe ("5m", "15m", "30m", "1d"). Use:
+- 5m / 15m: tactical confluence (recent flow, breakout/breakdown structure).
+- 30m: intraday trend integrity.
+- 1d: daily structure context (last 30 days).
+Choose timeframe per proposal horizon. Do NOT mix timeframes in same reasoning.
 
 # Analytical framework
 - N >= 100 occurrences and POP > 70% to open

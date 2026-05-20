@@ -30,9 +30,16 @@ def market_state():
 class TestSystemPrompt:
 
     def test_system_prompt_length_budget(self):
-        """Guard against accidental prompt bloat."""
-        assert len(SYSTEM_PROMPT) < 4000, (
-            f"SYSTEM_PROMPT is {len(SYSTEM_PROMPT)} chars, budget is 4000"
+        """Guard against accidental prompt bloat.
+
+        F-r6 raised Sprint 10 S.10.cons-e (ADR-009 D5): 4000 → 4500 estimate.
+        F-r6.5 reality measurement post-Write: verbatim Phase 2 content = +1273
+        chars actual (vs +800-1100 estimate). Budget raised 4500 → 5300 to
+        accommodate verbatim signal density (Opción 1a Camino 2 sign-off).
+        ~72 char post-add buffer = disciplined headroom.
+        """
+        assert len(SYSTEM_PROMPT) < 5300, (
+            f"SYSTEM_PROMPT is {len(SYSTEM_PROMPT)} chars, budget is 5300"
         )
 
     def test_system_prompt_mentions_athena_identity(self):
@@ -72,6 +79,39 @@ class TestSystemPrompt:
             assert SYSTEM_PROMPT.count(key) <= 1, (
                 f"injected field '{key}' appears {SYSTEM_PROMPT.count(key)} times"
             )
+
+    # ── Phase 2 semantics (Sprint 10 S.10.cons-e, ADR-009 D5) ─────────────────
+
+    def test_prompt_mentions_term_structure_semantics(self):
+        """Phase 2 ADR-009 D2-1 + D5: term_structure semantics section present."""
+        assert "term_structure" in SYSTEM_PROMPT
+        assert (
+            "contango" in SYSTEM_PROMPT.lower()
+            or "backwardation" in SYSTEM_PROMPT.lower()
+        )
+
+    def test_prompt_mentions_surface_dte_canonical_structure(self):
+        """Phase 2 ADR-009 D2-2 + D5: surface DTE canonical structure documented."""
+        assert "surface" in SYSTEM_PROMPT
+        assert (
+            "atm_iv" in SYSTEM_PROMPT
+            and "put_25d" in SYSTEM_PROMPT
+            and "call_25d" in SYSTEM_PROMPT
+        )
+
+    def test_prompt_mentions_ohlcv_intraday_timeframes(self):
+        """Phase 2 ADR-009 D2-3 + D5: ohlcv_intraday timeframes documented."""
+        assert "ohlcv_intraday" in SYSTEM_PROMPT
+        assert all(tf in SYSTEM_PROMPT for tf in ["5m", "15m", "30m", "1d"])
+
+    def test_prompt_phase2_fields_field_backed_not_aspirational(self):
+        """ADR-009 §1 cross-ref: Data priorities mentions field-backed Phase 2 fields."""
+        assert "term_structure" in SYSTEM_PROMPT
+        assert "surface" in SYSTEM_PROMPT
+
+    def test_system_prompt_length_under_5300(self):
+        """F-r6.5 catch S.10.cons-e: budget raised 4500 to 5300 reality alignment."""
+        assert len(SYSTEM_PROMPT) < 5300
 
 
 # ── build_user_prompt tests ───────────────────────────────────────────────────
