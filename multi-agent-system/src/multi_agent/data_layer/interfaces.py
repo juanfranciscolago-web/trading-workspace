@@ -77,10 +77,18 @@ class TickerSnapshot:
     """
 
     surface: dict[int, list[float]] = field(default_factory=dict)
-    """Delta-sampled surface: dict[delta_bucket → list[iv_per_expiration]].
+    """Volatility surface keyed by DTE (days to expiration).
 
-    Source: IvSurfaceRepository.get_surface_for_ticker + delta bucketing
-    (SchwabDataLayer S.10.cons-d processing). Delta buckets: 25, 50, 75.
+    Per ADR-009 D2-2 canonical:
+    - Keys: int DTE (days to expiration).
+    - Values: list[float] of 3 IVs = [atm_iv, put_25d_iv, call_25d_iv]
+      per expiration (ATM + put 25-delta skew + call 25-delta skew).
+
+    Example: {7: [0.20, 0.18, 0.22], 35: [0.22, 0.20, 0.24]}
+    (near-term 7 DTE + medium-term 35 DTE, each [ATM, put25d, call25d]).
+
+    Source: IvSurfaceRepository.get_surface_for_ticker + 25-delta bucketing
+    (SchwabDataLayer S.10.cons-d processing).
     Empty dict default — backward compat.
     """
 

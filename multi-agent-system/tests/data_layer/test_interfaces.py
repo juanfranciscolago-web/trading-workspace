@@ -70,16 +70,16 @@ class TestTickerSnapshotPhase2Fields:
         assert ts.term_structure[3] == (60, 0.22)
         assert all(isinstance(t, tuple) and len(t) == 2 for t in ts.term_structure)
 
-    def test_surface_delta_bucket_access(self):
-        """D2-2: dict[int, list[float]] keyed by delta bucket."""
+    def test_surface_dte_keyed_with_skew_values(self):
+        """D2-2 canonical: keys=DTE, values=[atm_iv, put_25d_iv, call_25d_iv]."""
         ts = TickerSnapshot(
             ticker="SPY", last_price=451.0, ohlcv_daily=[], ohlcv_hourly=[],
             iv_rank=50.0, iv_percentile=45.0, skew=_make_skew(), realized_vol_30d=0.18,
-            surface={25: [0.22, 0.20, 0.19], 50: [0.20, 0.19, 0.18], 75: [0.19, 0.18, 0.17]},
+            surface={7: [0.20, 0.18, 0.22], 35: [0.22, 0.20, 0.24]},
         )
-        assert ts.surface[25] == [0.22, 0.20, 0.19]
-        assert ts.surface[50] == [0.20, 0.19, 0.18]
-        assert ts.surface[75] == [0.19, 0.18, 0.17]
+        assert ts.surface[7] == [0.20, 0.18, 0.22]
+        assert ts.surface[35] == [0.22, 0.20, 0.24]
+        assert all(len(v) == 3 for v in ts.surface.values())  # [atm, put25d, call25d]
 
     def test_ohlcv_intraday_timeframe_keys(self):
         """D2-3: dict[str, list[OHLCV]] keyed by timeframe."""
@@ -141,16 +141,16 @@ class TestMarketStateToDictExtension:
         assert all(isinstance(t, list) for t in result)
 
     def test_surface_int_keys_to_str(self):
-        """F-r4: JSON requires string object keys. surface int keys → str."""
+        """F-r4: JSON requires string object keys. surface DTE int keys → str."""
         ts = TickerSnapshot(
             ticker="SPY", last_price=451.0, ohlcv_daily=[], ohlcv_hourly=[],
             iv_rank=50.0, iv_percentile=45.0, skew=_make_skew(), realized_vol_30d=0.18,
-            surface={25: [0.22], 50: [0.20], 75: [0.19]},
+            surface={7: [0.20, 0.18, 0.22], 35: [0.22, 0.20, 0.24]},
         )
         state = MarketState(timestamp=_TS, tickers={"SPY": ts}, correlations={})
         d = state.to_dict()
         result = d["tickers"]["SPY"]["surface"]
-        assert result == {"25": [0.22], "50": [0.20], "75": [0.19]}
+        assert result == {"7": [0.20, 0.18, 0.22], "35": [0.22, 0.20, 0.24]}
         assert all(isinstance(k, str) for k in result.keys())
 
     def test_ohlcv_intraday_timestamps_isoformat(self):
