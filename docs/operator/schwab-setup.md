@@ -658,7 +658,91 @@ ORDER BY timeframe;
 
 ---
 
-## Section 10 — Future Work / Tech debt
+## Section 10 — ATLAS Portfolio Integration (Sprint 11 onwards)
+
+ADR-013 Aceptado (2026-05-26). Live broker portfolio reads via SchwabClient
+for ATLAS validation. Mirror Phase 2 Consumer Surface §9 documentation
+pattern.
+
+### 10.1 Overview
+
+ATLAS validates trading proposals against real-time portfolio state. Two
+modes operational:
+
+- **Synthetic** (default, `USE_LIVE_PORTFOLIO=False`): DB-backed
+  SnapshotBuilder reads from `portfolio.snapshots` + `portfolio.positions`
+  tables. Existing behavior since Sprint 6. CachedSnapshotBuilder TTL 5s.
+- **Live** (`USE_LIVE_PORTFOLIO=True`): LiveSnapshotBuilder reads via
+  SchwabClient.get_positions() + get_balances(). Real broker portfolio state.
+  CachedSnapshotBuilder TTL 30s.
+
+### 10.2 USE_LIVE_PORTFOLIO Settings flag (D10)
+
+- **Default**: `False` (synthetic DB-backed mode).
+- **Production**: `True` post pre-deploy Schwab subaccount setup (§10.3 below).
+- **Independence**: NOT coupled with `USE_SCHWAB_DATA_LAYER`. ATHENA market
+  data reads (Sprint 5+) vs ATLAS portfolio reads (Sprint 11+) flag separately.
+
+### 10.3 SCHWAB_ACCOUNT_ID subaccount isolation (D9 + D9-1)
+
+**Pre-deploy operator action REQUIRED before setting USE_LIVE_PORTFOLIO=True**:
+
+1. **Schwab portal**: Verify subaccounts. Create new paper subaccount distinct
+   from Eolo bots'. Note `accountNumber`.
+2. **Set env var**: `SCHWAB_ACCOUNT_ID="123456789"` (your new multi-agent
+   subaccount).
+3. **Validate**: Same API key authentication; isolation via accountNumber.
+
+**Why subaccount isolation**: Multi-agent + Eolo share same Schwab parent
+account + same API key. Distinct `accountNumber` per subaccount → naturally
+isolated. ATLAS reads exclusively multi-agent positions, no Eolo conflation.
+
+**Fail-fast contract (D-ν STRENGTHENED + D-ο)**: If `USE_LIVE_PORTFOLIO=True`
++ `SCHWAB_ACCOUNT_ID=""` → app refuses to start (ValueError). Silent
+auto-discovery would use Eolo's first account = wrong positions = silent
+bug. Better fail loudly at startup.
+
+### 10.4 LiveSnapshotBuilder + CachedSnapshotBuilder (D6 + D7)
+
+`_build_snapshot_builder(settings, pool)` helper en `multi_agent/api/app.py`:
+- USE_LIVE_PORTFOLIO=True path: `CachedSnapshotBuilder(LiveSnapshotBuilder(SchwabClient.from_gcp(account_id=...)), ttl_seconds=30.0)`.
+- USE_LIVE_PORTFOLIO=False path: `CachedSnapshotBuilder(SnapshotBuilder(pool), ttl_seconds=5.0)`.
+
+ATLAS engine consumption: `validate(proposal, decision, snapshot, limits, buckets)`
+contract preserved. Same PortfolioSnapshot type, agnostic to source.
+
+### 10.5 Phase 1 simplifications (sub-decisions D-η a D-λ)
+
+5 Phase 1 simplifications cementadas (tech debt Sprint 12+):
+- **Greeks default Decimal(0)** (D-η): Schwab positions no returns greeks.
+  Tech debt #1: cross-source iv_surface or options chain on-demand.
+- **PnL weekly/monthly/drawdown default 0.0** (D-θ): historical snapshots
+  table not yet populated. Tech debt #2.
+- **ticker = symbol raw (no OCC parser)** (D-ι-A): OPTION positions use full
+  OCC string Phase 1. ATLAS validates per asset_class. Tech debt #3.
+- **portfolio_beta default 0.0** (D-κ): no benchmark source Phase 1. Tech
+  debt #4.
+- **pnl_daily_usd = sum positions[].unrealized_pnl** (D-λ): Schwab
+  currentDayProfitLoss per position aggregate. Approximate but better than 0.
+
+### 10.6 Monitoring + operator workflow
+
+**Startup logs** (info level):
+- `ATLAS LiveSnapshotBuilder active (account_id=<id>, TTL=30s)` → confirm
+  live mode + account_id correct.
+- Error logs: `USE_LIVE_PORTFOLIO=True but LiveSnapshotBuilder construction
+  failed` → GCP credentials or Schwab API issue.
+
+**Validation procedure post-deploy**:
+1. Verify lifespan startup log shows LiveSnapshotBuilder active.
+2. Check ATLAS validation request: `snapshot_id` should change every ~30s
+   (CachedSnapshotBuilder TTL).
+3. Cross-verify positions count vs Schwab portal UI.
+4. Monitor `_ttl` cache hit ratio (Sprint 12+ telemetry).
+
+---
+
+## Section 11 — Future Work / Tech debt
 
 Items canonical numbered. Cross-reference sources:
 - ADR-005 §9.3 IDs #1-#11 (Sprint 6 tech debt, inherited).

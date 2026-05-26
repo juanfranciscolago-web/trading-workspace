@@ -1,7 +1,7 @@
 # ADR-013: ATLAS Portfolio Integration — SchwabClient ports + LiveSnapshotBuilder + flag
 
 **Fecha:** 2026-05-20
-**Estado:** Propuesto
+**Estado:** Aceptado (2026-05-26)
 **Contexto:** Sprint 11 LOCKED via S.11.plan-a (commit `e66ed45`, 2026-05-20, scoring 3.60/5 vs WebSocket 2.35, gap 1.25 decisive). Esta ADR define ATLAS portfolio integration completion — SchwabClient.get_positions + get_balances ports + LiveSnapshotBuilder NEW class + ATLAS engine wiring + lifespan swap + USE_LIVE_PORTFOLIO flag. ADR-013 NEW number (no renumber required — ATLAS portfolio NOT en ADR-008 D6 sequencing).
 
 ---
@@ -249,15 +249,117 @@ Independent from `USE_SCHWAB_DATA_LAYER`:
 
 ---
 
-## 9. Close-out (S.11.atlas-f, pending)
+## 9. Close-out (S.11.atlas-f, 2026-05-26)
 
-> Sección se completa en S.11.atlas-f. Estructura prevista (mirror ADR-005/006/007/009 §9):
-> - §9.1 Sub-blocks delivered (S.11.atlas-a/b/c/d/e/f con commits + LOC + tests + sign-off dates).
-> - §9.2 Rule #15 findings summary (F-r1 a F-r5 + implementation findings).
-> - §9.3 Tech debt registered (deferred Q1-Q5 + emergent).
-> - §9.4 Next steps Sprint 12+ (ADR-010 Schwab WebSocket + ADR-011 GEX + ADR-012 HERMES tentative).
-> - Status: Propuesto → Aceptado.
+Sprint 11 ATLAS portfolio integration completado. ADR-013 Aceptado.
+
+**Sprint 11 work period**: 2026-05-20 (Sprint plan-a + atlas-a a atlas-e, ~4 horas
+intense Camino 2 protocol) + 2026-05-26 (atlas-f close-out post 6-day operator
+break).
+
+### 9.1 Sub-blocks delivered
+
+| Commit | Sub-block | LOC delta | Tests delta | Descripción |
+|--------|-----------|-----------|-------------|-------------|
+| `e66ed45` | S.11.plan-a | +182 doc | 0 | Sprint 11 priority analysis ATLAS LOCKED |
+| `d33d8fe` | S.11.atlas-a | +263 doc | 0 | ADR-013 plan firmado (10 decisions D1-D10 + D9-1) |
+| `5873cd0` | S.11.atlas-b | +407 code+tests | +10 | SchwabClient.get_positions + get_account_id port from Eolo |
+| `6f28c66` | S.11.atlas-c | +295 code+tests | +11 | SchwabClient.get_balances port from Schwab API docs |
+| `c4b3c14` | S.11.atlas-d | +333 code+tests | +14 | LiveSnapshotBuilder + USE_LIVE_PORTFOLIO + SCHWAB_ACCOUNT_ID |
+| `bfc297f` | S.11.atlas-e | +188 code+tests | +6 | ATLAS lifespan integration _build_snapshot_builder helper |
+| _S.11.atlas-f_ | _this commit_ | _~+385 doc_ | _0_ | _Close-out + ADR Aceptado + operator §10 + daily log_ |
+| **Total** | — | **~+2,053** | **+41** | — |
+
+### 9.2 Findings rule #15 summary
+
+**18 catches cumulative Sprint 11** (vs Sprint 10's 8 record). Pre-Write
+discipline working sustained. Pattern observable: F-r catches concentrate
+en first-touch sub-blocks (atlas-a 5, atlas-b 3, atlas-d 2, atlas-e 4),
+decay as patterns proven (atlas-c 0).
+
+| ID | Sub-block | Type | Descripción |
+|----|-----------|------|-------------|
+| F-r1 | atlas-a | Missing | TRADER_BASE_URL constant MISSING SchwabClient |
+| F-r2 | atlas-a | Source | Eolo NO has get_balances precedent (Schwab docs source) |
+| F-r3 | atlas-a | Scope | portfolio_routes.py does NOT exist (out of scope Sprint 11) |
+| F-r4 | atlas-a | Independence | USE_LIVE_PORTFOLIO ≠ USE_SCHWAB_DATA_LAYER importance |
+| F-r5 | atlas-a | Operator | Pre-deploy subaccount creation required (manual Schwab portal) |
+| F-r9 | atlas-b | Naming | spec self._credentials underscored vs reality self.credentials public |
+| F-r10 | atlas-b | Naming | spec client_id/client_secret vs reality api_key/api_secret |
+| F-r11 | atlas-b | Pattern | spec module-level TRADER_BASE_URL vs reality class-level |
+| F-r12 | atlas-d | Path | spec settings.py vs reality config.py |
+| F-r13 | atlas-d | Signature | snapshot_hash(positions, cash_usd, pnl_daily_usd, snapshot_at) vs spec assumption |
+| F-r14 | atlas-e | Type | CachedSnapshotBuilder type hint SnapshotBuilder vs LiveSnapshotBuilder duck-typing |
+| F-r15 | atlas-e | Path | spec atlas_engine.py vs reality atlas_core.py |
+| F-r16 | atlas-e | Pattern | SchwabClient 4th instance construction (tech debt ADR-005 §9.3 #1) |
+| F-r17 | atlas-e | Attribute | spec result._ttl_seconds vs reality result._ttl |
+| F-r18 | atlas-f | Path | spec docs/daily-logs/ vs reality docs/ workspace root convention |
+
+**Patterns observados**:
+- Cross-package work (shared_core ↔ multi-agent) yields catches concentradas atlas-b/d/e.
+- Camino 2 protocol value sustained: 18 catches pre-Write = ~3-4 horas debugging
+  saved post-implementation.
+- ADR canonical re-read discipline (F-r5 Sprint 10 lesson) successful Sprint 11:
+  multiple `awk '/### DX/,/### DY/'` re-reads pre-Write.
+
+### 9.3 Tech debt registered
+
+**Sprint 11 NEW tech debt items** (5 Phase 1 simplifications + 1 cross-cutting):
+
+1. **Greeks cross-source** (D-η defer Sprint 12+): PositionView delta/vega/theta
+   default Decimal(0) Phase 1. Trigger: ATHENA→ATLAS proposals requiring
+   Greeks-based validation. Source candidate: iv_surface (Sprint 7) or options
+   chain on-demand.
+
+2. **PnL history table** (D-θ defer Sprint 12+): pnl_weekly_pct + pnl_monthly_pct
+   + drawdown_from_peak_pct default 0.0 Phase 1. Trigger: trio paper trading
+   accumulates daily snapshots. Schema: `daily_pnl_history` table.
+
+3. **OCC ticker parser** (D-ι-A defer Sprint 12+): PositionView ticker = Schwab
+   symbol raw (full OCC for OPTION). Trigger: ATHENA→ATLAS proposals requiring
+   ticker-based lookups OPTION positions. Implementation: OCC regex + Schwab
+   instrument.underlyingSymbol fallback.
+
+4. **portfolio_beta cross-source** (D-κ defer Sprint 12+): Default 0.0 Phase 1.
+   Trigger: ATLAS validation rules requiring portfolio_beta vs SPX. Source:
+   compute from historical daily returns vs SPX benchmark.
+
+5. **CachedSnapshotBuilder Protocol refactor** (F-r14 defer Sprint 12+): Type
+   hint `builder: SnapshotBuilder` accepts LiveSnapshotBuilder duck-typed.
+   mypy may warn. Resolution: `SupportsBuild` Protocol.
+
+6. **SchwabClient instance accumulation** (F-r16 cross-cutting): 4 instances
+   (_select_data_layer + IvHistoryWorker + OhlcvWorker + LiveSnapshotBuilder).
+   Already registered ADR-005 §9.3 #1. Reaffirmed Sprint 11.
+
+**Inherited tech debt resolved Sprint 11**: 0 (Sprint 11 standalone ADR-013
+NEW, no cross-sprint dependencies resolved).
+
+### 9.4 Next steps Sprint 12+ (TENTATIVE)
+
+**Sprint 11 LOCKED → Sprint 12 re-score fresh per rule #15 strict** (per
+S.11.plan-a + ADR-008 §9.4 + TENTATIVE caveat 4x proven Sprints 8/9/10/11).
+
+**Candidates Sprint 12 (re-score required)**:
+
+- **ADR-010 Schwab WebSocket part 1** (Tier D infra per ADR-008 D5). Sprint 11
+  second-place candidate (2.35 weighted). Multi-sprint pattern Sprint 12-13.
+- **Paper trading observation telemetry**: Sprint 11 ATLAS live integration
+  ready. Trigger: production runs accumulate telemetry → F-r6.5 budget
+  trajectory monitoring (Sprint 10 lesson) + R6 throttling validation.
+- **Greeks cross-source D-η** (tech debt #1): si ATLAS Greeks validation rules
+  require non-zero delta/vega/theta.
+
+**Sprint 13-16+ TENTATIVE**:
+- ADR-011 GEX compute pipeline (Tier A).
+- ADR-012 HERMES implementation (Sprint 13-16+ ADR-008 timeline).
+
+**Rule #15 reminder**: Sprint 12+ NOT pre-committed. Re-score fresh per
+sprint close. Pre-recolección strict per Camino 2 protocol. ADR canonical
+re-read pre-Write discipline (F-r5 lesson). Path verification pre-Write
+(F-r12 + F-r15 + F-r18 pattern across Sprint 10/11).
 
 ---
 
-> **Próximo sub-bloque:** S.11.atlas-b (SchwabClient.get_positions port + account_id discovery + ~10 tests). Inicia tras Juan sign-off plan firmado actual.
+> **Sprint 11 ATLAS portfolio integration cerrado al 100%** (7 commits 20-26 May 2026).
+> Próximo: Sprint 12 priority analysis re-score fresh per rule #15.
