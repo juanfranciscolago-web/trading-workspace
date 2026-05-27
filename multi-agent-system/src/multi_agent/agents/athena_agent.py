@@ -61,6 +61,17 @@ class AthenaAgent(BaseAgent):
         # 2. Build the user prompt with the snapshot embedded.
         user_prompt = build_user_prompt(market_state)
 
+        # Sprint 12 telemetry-b: Q7/F-r6.5 prompt char count instrumentation.
+        logger.info(
+            "athena_prompt_metrics",
+            extra={
+                "event": "athena_prompt_metrics",
+                "system_chars": len(SYSTEM_PROMPT),
+                "user_chars": len(user_prompt),
+                "correlation_id": str(correlation_id),
+            },
+        )
+
         # 3. Call the LLM router.
         response = self._claude_router.send(
             task_type="proposal_generation",

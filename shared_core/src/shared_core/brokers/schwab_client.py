@@ -59,6 +59,7 @@ class RateLimiter:
     def __init__(self, max_calls_per_second: int = 5):
         self.max_calls = max_calls_per_second
         self.call_times: list[float] = []
+        self.throttle_count: int = 0
 
     def wait_if_needed(self) -> None:
         """Block until we're under the rate limit."""
@@ -70,6 +71,16 @@ class RateLimiter:
             # Sleep until oldest call falls outside the window
             sleep_time = 1.0 - (now - self.call_times[0]) + 0.01
             if sleep_time > 0:
+                self.throttle_count += 1
+                logger.warning(
+                    "rate_limiter_throttled",
+                    extra={
+                        "event": "rate_limiter_throttled",
+                        "max_calls": self.max_calls,
+                        "sleep_seconds": round(sleep_time, 3),
+                        "throttle_count_total": self.throttle_count,
+                    },
+                )
                 time.sleep(sleep_time)
                 # Refresh after sleep
                 now = time.time()
@@ -528,6 +539,15 @@ class SchwabClient:
                 headers["Authorization"] = f"Bearer {self.credentials.access_token}"
                 continue
 
+            if response.status_code == 429:
+                logger.warning(
+                    "schwab_429_throttled",
+                    extra={
+                        "event": "schwab_429_throttled",
+                        "endpoint": "chain",
+                        "status_code": 429,
+                    },
+                )
             raise SchwabAPIError(
                 f"Schwab /chains returned {response.status_code} "
                 f"for {underlying}: {response.text[:200]}"
@@ -844,6 +864,15 @@ class SchwabClient:
                 continue
 
             if response.status_code != 200:
+                if response.status_code == 429:
+                    logger.warning(
+                        "schwab_429_throttled",
+                        extra={
+                            "event": "schwab_429_throttled",
+                            "endpoint": "positions",
+                            "status_code": 429,
+                        },
+                    )
                 raise SchwabAPIError(
                     f"get_positions: HTTP {response.status_code} — {response.text[:200]}"
                 )
@@ -904,6 +933,15 @@ class SchwabClient:
                 continue
 
             if response.status_code != 200:
+                if response.status_code == 429:
+                    logger.warning(
+                        "schwab_429_throttled",
+                        extra={
+                            "event": "schwab_429_throttled",
+                            "endpoint": "balances",
+                            "status_code": 429,
+                        },
+                    )
                 raise SchwabAPIError(
                     f"get_balances: HTTP {response.status_code} — {response.text[:200]}"
                 )
