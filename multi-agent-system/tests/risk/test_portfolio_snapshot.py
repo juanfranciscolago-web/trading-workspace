@@ -285,3 +285,60 @@ class TestLiveSnapshotBuilder:
         assert snapshot.snapshot_at.tzinfo is not None
         assert snapshot.snapshot_id  # non-empty
         assert len(snapshot.snapshot_id) == 64  # sha256 hex
+
+
+# ── TestSupportsBuildProtocol (Sprint 12 protocol-a, ADR-013 §9.3 #5 resolved) ──
+
+from multi_agent.risk.portfolio_snapshot import (  # noqa: E402
+    CachedSnapshotBuilder,
+    SnapshotBuilder,
+    SupportsBuild,
+)
+
+
+class TestSupportsBuildProtocol:
+    """SupportsBuild Protocol structural compliance verification.
+
+    ADR-013 §9.3 #5 (F-r14) resolved Sprint 12 S.12.protocol-a:
+    @runtime_checkable Protocol replacing duck-typed CachedSnapshotBuilder
+    type hint. Both SnapshotBuilder + LiveSnapshotBuilder satisfy Protocol.
+    """
+
+    def test_snapshot_builder_satisfies_protocol(self):
+        """SnapshotBuilder implements SupportsBuild (isinstance check)."""
+        pool_mock = MagicMock()
+        builder = SnapshotBuilder(pool_mock)
+        assert isinstance(builder, SupportsBuild)
+
+    def test_live_snapshot_builder_satisfies_protocol(self):
+        """LiveSnapshotBuilder implements SupportsBuild (isinstance check)."""
+        schwab_mock = MagicMock()
+        builder = LiveSnapshotBuilder(schwab_mock)
+        assert isinstance(builder, SupportsBuild)
+
+    def test_non_builder_rejected_by_protocol(self):
+        """Random class without build() method fails Protocol check."""
+        class NotABuilder:
+            pass
+
+        instance = NotABuilder()
+        assert not isinstance(instance, SupportsBuild)
+        assert not isinstance(object(), SupportsBuild)
+
+    def test_cached_snapshot_builder_accepts_protocol_compliant(self):
+        """CachedSnapshotBuilder.__init__ accepts any SupportsBuild instance.
+
+        Verifies Protocol-based type hint works pragmatically: a Mock
+        configured con build() method returning PortfolioSnapshot is accepted
+        by CachedSnapshotBuilder.
+        """
+        snapshot_stub = MagicMock()
+        snapshot_stub.snapshot_id = "a" * 64
+        mock_builder = MagicMock()
+        mock_builder.build.return_value = snapshot_stub
+
+        cached = CachedSnapshotBuilder(mock_builder, ttl_seconds=10.0)
+
+        result = cached.get()
+        mock_builder.build.assert_called_once()
+        assert result is snapshot_stub

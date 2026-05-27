@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
-from typing import Sequence
+from typing import Protocol, Sequence, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +240,42 @@ class SnapshotBuilder:
         }
 
 
+# ── SupportsBuild Protocol (ADR-013 §9.3 #5, F-r14 resolved S.12.protocol-a) ──
+
+@runtime_checkable
+class SupportsBuild(Protocol):
+    """Protocol for snapshot builders consumed by CachedSnapshotBuilder.
+
+    ADR-013 §9.3 #5 (F-r14 tech debt resolved Sprint 12 S.12.protocol-a).
+    Replaces type hint `builder: SnapshotBuilder` con structural Protocol
+    accepting any class implementing build() -> PortfolioSnapshot.
+
+    Allows CachedSnapshotBuilder to wrap both SnapshotBuilder (DB-backed
+    synthetic mode) and LiveSnapshotBuilder (live Schwab broker mode) without
+    duck-typing concerns. mypy strict mode futuro-compatible.
+
+    Implementations (Sprint 11+):
+    - SnapshotBuilder: DB-backed reads from portfolio.snapshots tables.
+    - LiveSnapshotBuilder: live Schwab broker via SchwabClient.
+
+    @runtime_checkable enables isinstance(obj, SupportsBuild) verification
+    en tests (canonical typing.Protocol pattern PEP 544).
+    """
+
+    def build(self) -> PortfolioSnapshot:
+        """Build and return a PortfolioSnapshot.
+
+        Returns:
+            PortfolioSnapshot instance con positions + aggregate fields.
+
+        Raises:
+            Implementation-specific errors (e.g., SchwabAPIError live mode,
+            DB connection errors synthetic mode). Caller (CachedSnapshotBuilder)
+            propagates per ADR-013 D-κ stale data fallback pattern.
+        """
+        ...
+
+
 # ── Cached builder ────────────────────────────────────────────────────────────
 
 class CachedSnapshotBuilder:
@@ -250,8 +286,20 @@ class CachedSnapshotBuilder:
     (mismo snapshot_id). Default TTL: 5 segundos.
     """
 
-    def __init__(self, builder: SnapshotBuilder, ttl_seconds: float = 5.0) -> None:
-        self._builder = builder
+    def __init__(self, builder: SupportsBuild, ttl_seconds: float = 5.0) -> None:
+        """Init CachedSnapshotBuilder con TTL-based caching.
+
+        ADR-013 §9.3 #5 resolved Sprint 12 S.12.protocol-a: builder type hint
+        is SupportsBuild Protocol (structural, runtime-checkable) replacing
+        concrete SnapshotBuilder class. Accepts any builder implementing
+        build() -> PortfolioSnapshot.
+
+        Args:
+            builder: Any SupportsBuild-compliant instance (SnapshotBuilder
+                synthetic mode or LiveSnapshotBuilder live mode).
+            ttl_seconds: Cache TTL (default 5.0s synthetic, 30.0s live).
+        """
+        self._builder: SupportsBuild = builder
         self._ttl = ttl_seconds
         self._cached: PortfolioSnapshot | None = None
         self._cached_at: float = 0.0
