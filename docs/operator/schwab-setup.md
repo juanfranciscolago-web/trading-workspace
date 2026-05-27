@@ -742,7 +742,49 @@ contract preserved. Same PortfolioSnapshot type, agnostic to source.
 
 ---
 
-## Section 11 — Future Work / Tech debt
+## Section 11 — Telemetry observation (Sprint 12 onwards)
+
+S.12.telemetry-a memo (`docs/decisions/sprint-12-telemetry-setup.md`) establece scope + procedure. Esta sección operacional define cómo el operador lee logs + métricas + alertas post-deploy USE_LIVE_PORTFOLIO=True.
+
+### 11.1 Triggers observed
+
+| Trigger | Source | Observation |
+|---------|--------|-------------|
+| Q5 | ADR-009 §9.4 #5 | Schwab API rate limit validation (status amended Sprint 11 — memo §2.5) |
+| Q7 | ADR-009 §9.4 #7 | ATHENA prompt budget trajectory monitoring |
+| R6 | ADR-013 §7 | Schwab paper trading API throttling |
+| F-r6.5 | ADR-009 Sprint 10 | ATHENA budget reality measurement gap |
+
+### 11.2 Observation procedure
+
+**Daily checks (operator)**:
+1. Tail multi-agent-system logs filtered por `RateLimiter` + `SchwabAPIError` + `429 HTTP`.
+2. Verify CachedSnapshotBuilder cache hit ratio (snapshot_id rotation cadence).
+3. ATLAS validation latency p99 < 500ms target.
+
+**Weekly checks (operator)**:
+1. Aggregate Q5 throttling count.
+2. ATHENA SYSTEM_PROMPT char count comparison vs Sprint 10 baseline (5300 chars).
+3. Multi-agent + Eolo subaccount activity correlation (D9 isolation working verify).
+
+### 11.3 Alerts (no formal infra)
+
+Phase 1: no Prometheus/PagerDuty. Logger.warning patterns visible en log aggregation tool (kubectl logs, tail, o existing GCP Logging).
+
+Phase 2 alerts (S.12.telemetry-b + onwards):
+- ALARM: RateLimiter > 5 req/sec sustained (Q5 critical).
+- WARNING: ATHENA prompt > 6000 chars (Q7 trajectory soft threshold).
+- ALARM: 429 throttling > 5/hour sustained (R6 critical).
+
+### 11.4 Reporting cadence
+
+- **Weekly check-in**: operator notes en daily logs (DAILY_LOG_YYYY-MM-DD.md pattern).
+- **Bi-weekly summary**: trigger state per Q5/Q7/R6/F-r6.5 + recommendations.
+- **Close-out memo**: S.12.telemetry-c after 4-8 weeks accumulated data. Decision criteria per trigger per memo §5.
+
+---
+
+## Section 12 — Future Work / Tech debt
 
 Items canonical numbered. Cross-reference sources:
 - ADR-005 §9.3 IDs #1-#11 (Sprint 6 tech debt, inherited).
