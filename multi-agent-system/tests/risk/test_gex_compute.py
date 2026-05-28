@@ -20,17 +20,19 @@ from multi_agent.risk.gex_compute import (
     compute_gamma_flip_point,
     compute_gex_per_expiration,
     compute_gex_per_strike,
+    compute_vanna_charm_totals,
 )
 
 
 def _row(strike: float, gamma: float, oi: int, option_type: str,
-         expiration: date | None = None) -> dict:
-    """Synthetic iv_surface row factory."""
+         expiration: date | None = None, iv: float = 0.20) -> dict:
+    """Synthetic iv_surface row factory (iv field added Sprint 13 gex-b)."""
     return {
         "strike": strike,
         "gamma": gamma,
         "open_interest": oi,
         "option_type": option_type,
+        "iv": iv,
         "expiration": expiration or date(2026, 6, 20),
     }
 
@@ -161,14 +163,60 @@ class TestBuildGexSnapshot:
         assert 100.0 in snapshot.gex_per_strike
         assert snapshot.gex_total != 0.0
 
-    def test_vanna_charm_init_zero_gex_a_scaffold(self):
-        """Sprint 13 gex-a scaffold: vanna/charm = 0.0 (D-ε-6)."""
+    def test_vanna_charm_populated_gex_b(self):
+        """Sprint 13 gex-b: vanna/charm populated via Hull canonical (D-α-7).
+
+        D-η-7: renamed from test_vanna_charm_init_zero_gex_a_scaffold.
+        Gex-a scaffold returned 0.0; gex-b populates via shared_core
+        greeks_calculator extension. With non-degenerate inputs (T>0, iv>0),
+        vanna/charm are non-zero floats.
+        """
         ts = datetime(2026, 5, 28, tzinfo=timezone.utc)
-        rows = [_row(100.0, 0.05, 1000, "CALL")]
+        rows = [_row(100.0, 0.05, 1000, "CALL", expiration=date(2026, 6, 27))]
         snapshot = build_gex_snapshot(rows, "SPY", 100.0, snapshot_ts=ts)
 
-        assert snapshot.vanna_total == 0.0
-        assert snapshot.charm_total == 0.0
+        assert isinstance(snapshot.vanna_total, float)
+        assert isinstance(snapshot.charm_total, float)
+        # ATM call ~30 DTE has some non-zero charm (delta decay)
+        assert snapshot.charm_total != 0.0
+
+
+class TestComputeVannaCharmTotals:
+    """Aggregate Vanna/Charm per ADR-011 D6 amendment Sprint 13 gex-b."""
+
+    def test_basic_aggregation(self):
+        """Multiple strikes aggregate weighted by OI."""
+        ts = datetime(2026, 5, 28, tzinfo=timezone.utc)
+        rows = [
+            _row(100.0, 0.05, 1000, "CALL", expiration=date(2026, 6, 27)),
+            _row(105.0, 0.03, 500, "CALL", expiration=date(2026, 6, 27)),
+        ]
+        vanna, charm = compute_vanna_charm_totals(rows, 100.0, ts)
+        assert isinstance(vanna, float)
+        assert isinstance(charm, float)
+
+    def test_case_translation_uppercase(self):
+        """option_type 'CALL'/'PUT' uppercase translates to lowercase (F-r ant #1)."""
+        ts = datetime(2026, 5, 28, tzinfo=timezone.utc)
+        rows = [_row(100.0, 0.05, 1000, "CALL", expiration=date(2026, 6, 27))]
+        vanna, charm = compute_vanna_charm_totals(rows, 100.0, ts)
+        assert isinstance(vanna, float)
+
+    def test_zero_dte_skipped(self):
+        """T<=0 (0DTE same-day) skipped defensively."""
+        ts = datetime(2026, 5, 28, tzinfo=timezone.utc)
+        rows = [_row(100.0, 0.05, 1000, "CALL", expiration=date(2026, 5, 28))]
+        vanna, charm = compute_vanna_charm_totals(rows, 100.0, ts)
+        assert vanna == 0.0
+        assert charm == 0.0
+
+    def test_invalid_spot_returns_zeros(self):
+        """spot<=0 → (0.0, 0.0) defensive."""
+        ts = datetime(2026, 5, 28, tzinfo=timezone.utc)
+        rows = [_row(100.0, 0.05, 1000, "CALL", expiration=date(2026, 6, 27))]
+        vanna, charm = compute_vanna_charm_totals(rows, 0.0, ts)
+        assert vanna == 0.0
+        assert charm == 0.0
 
     def test_default_snapshot_ts_utc(self):
         """snapshot_ts defaults to datetime.now(UTC)."""

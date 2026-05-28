@@ -27,7 +27,9 @@ from shared_core.models import (
 from shared_core.utils.greeks_calculator import (
     BlackScholesInput,
     black_scholes_price,
+    calculate_charm,
     calculate_greeks,
+    calculate_vanna,
     implied_volatility,
     time_to_expiry_years,
 )
@@ -305,3 +307,136 @@ class TestEvents:
         assert recovered.event_type == original.event_type
         assert recovered.source == original.source
         assert recovered.payload == original.payload
+
+
+# =============================================================================
+# Vanna / Charm Hull canonical (Sprint 13 gex-b, ADR-011 D6 amendment)
+# =============================================================================
+
+class TestCalculateVanna:
+    """Vanna Hull canonical = -e^(-qT) × N'(d1) × d2 / σ."""
+
+    def test_atm_call_vanna_near_zero(self):
+        """ATM call Vanna near zero (d2 ≈ 0 at-the-money)."""
+        inputs = BlackScholesInput(
+            underlying_price=100.0, strike=100.0,
+            time_to_expiry_years=0.25, volatility=0.20,
+            option_type="call", dividend_yield=0.0, risk_free_rate=0.05,
+        )
+        vanna = calculate_vanna(inputs)
+        assert abs(vanna) < 1.0
+
+    def test_otm_call_vanna_positive(self):
+        """OTM call (K > S) → d2 < 0 → Vanna positive (per Hull canonical sign).
+
+        Vanna = -e^(-qT) × N'(d1) × d2 / σ; with d2<0 → sign positive.
+        """
+        inputs = BlackScholesInput(
+            underlying_price=100.0, strike=110.0,
+            time_to_expiry_years=0.25, volatility=0.20,
+            option_type="call", dividend_yield=0.0, risk_free_rate=0.05,
+        )
+        vanna = calculate_vanna(inputs)
+        assert vanna > 0.0
+
+    def test_vanna_zero_t_defensive(self):
+        """T<=0 → 0.0 (degenerate)."""
+        inputs = BlackScholesInput(
+            underlying_price=100.0, strike=100.0,
+            time_to_expiry_years=0.0, volatility=0.20,
+            option_type="call", dividend_yield=0.0, risk_free_rate=0.05,
+        )
+        assert calculate_vanna(inputs) == 0.0
+
+    def test_vanna_finite_diff_benchmark(self):
+        """Finite-difference numerical vs analytical Vanna tolerance 1%."""
+        inputs = BlackScholesInput(
+            underlying_price=100.0, strike=105.0,
+            time_to_expiry_years=0.25, volatility=0.20,
+            option_type="call", dividend_yield=0.0, risk_free_rate=0.05,
+        )
+        vanna_analytical = calculate_vanna(inputs)
+        epsilon = 1e-4
+        inputs_plus = BlackScholesInput(
+            underlying_price=100.0, strike=105.0,
+            time_to_expiry_years=0.25, volatility=0.20 + epsilon,
+            option_type="call", dividend_yield=0.0, risk_free_rate=0.05,
+        )
+        greeks_plus = calculate_greeks(inputs_plus)
+        greeks_base = calculate_greeks(inputs)
+        vanna_numerical = (greeks_plus.delta - greeks_base.delta) / epsilon
+
+        assert abs(vanna_analytical - vanna_numerical) / abs(vanna_numerical) < 0.01
+
+
+class TestCalculateCharm:
+    """Charm Hull canonical = ∂Delta/∂T per-year."""
+
+    def test_atm_call_charm_computed(self):
+        """ATM call Charm returns float."""
+        inputs = BlackScholesInput(
+            underlying_price=100.0, strike=100.0,
+            time_to_expiry_years=0.25, volatility=0.20,
+            option_type="call", dividend_yield=0.0, risk_free_rate=0.05,
+        )
+        charm = calculate_charm(inputs)
+        assert isinstance(charm, float)
+
+    def test_put_charm_sign(self):
+        """Put Charm differs from call by first_term (dividend-dependent)."""
+        inputs_call = BlackScholesInput(
+            underlying_price=100.0, strike=100.0,
+            time_to_expiry_years=0.25, volatility=0.20,
+            option_type="call", dividend_yield=0.0, risk_free_rate=0.05,
+        )
+        inputs_put = BlackScholesInput(
+            underlying_price=100.0, strike=100.0,
+            time_to_expiry_years=0.25, volatility=0.20,
+            option_type="put", dividend_yield=0.0, risk_free_rate=0.05,
+        )
+        # With q=0 first_term=0 both → call_charm == put_charm
+        assert calculate_charm(inputs_call) == pytest.approx(calculate_charm(inputs_put))
+
+    def test_charm_zero_t_defensive(self):
+        """T<=0 → 0.0 (degenerate)."""
+        inputs = BlackScholesInput(
+            underlying_price=100.0, strike=100.0,
+            time_to_expiry_years=0.0, volatility=0.20,
+            option_type="call", dividend_yield=0.0, risk_free_rate=0.05,
+        )
+        assert calculate_charm(inputs) == 0.0
+
+    def test_charm_finite_diff_benchmark(self):
+        """Finite-difference vs analytical Charm magnitude tolerance 5%.
+
+        Hull charm uses elapsed-time convention (charm = -∂Δ/∂T_remaining).
+        Numerical derivative is taken w.r.t. elapsed time (T_minus < T_base
+        represents time having passed), so analytical and numerical should
+        agree in both sign and magnitude.
+        """
+        T_base = 0.25
+        inputs = BlackScholesInput(
+            underlying_price=100.0, strike=105.0,
+            time_to_expiry_years=T_base, volatility=0.20,
+            option_type="call", dividend_yield=0.0, risk_free_rate=0.05,
+        )
+        charm_analytical_per_year = calculate_charm(inputs)
+
+        epsilon = 1e-4
+        inputs_minus_t = BlackScholesInput(
+            underlying_price=100.0, strike=105.0,
+            time_to_expiry_years=T_base - epsilon, volatility=0.20,
+            option_type="call", dividend_yield=0.0, risk_free_rate=0.05,
+        )
+        greeks_t = calculate_greeks(inputs)
+        greeks_t_minus = calculate_greeks(inputs_minus_t)
+        # Charm = -∂Δ/∂T_remaining (Hull elapsed-time convention).
+        # Numerical: as T_remaining decreases, how does delta change?
+        # = (delta_at_T - delta_at_T_minus) / epsilon = ∂Δ/∂T_remaining
+        # Negate to match Hull convention.
+        charm_numerical_per_year = -(greeks_t.delta - greeks_t_minus.delta) / epsilon
+
+        assert isinstance(charm_analytical_per_year, float)
+        if abs(charm_numerical_per_year) > 1e-3:
+            tolerance = max(0.05, abs(charm_numerical_per_year) * 0.05)
+            assert abs(charm_analytical_per_year - charm_numerical_per_year) < tolerance

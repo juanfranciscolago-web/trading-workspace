@@ -153,6 +153,58 @@ def calculate_greeks(inputs: BlackScholesInput) -> Greeks:
     )
 
 
+def calculate_vanna(inputs: BlackScholesInput) -> float:
+    """Hull canonical Vanna = ∂Delta/∂σ = -e^(-qT) × N'(d1) × d2 / σ.
+
+    Per-unit-σ change (multiply by 0.01 for per-1pct convention).
+
+    Returns 0.0 si T<=0 o σ<=0 (degenerate, mirror calculate_greeks pattern).
+
+    ADR-011 D6 amendment Sprint 13 gex-b (math accuracy Hull canonical).
+    """
+    if inputs.time_to_expiry_years <= 0 or inputs.volatility <= 0:
+        return 0.0
+    d1, d2 = calculate_d1_d2(inputs)
+    div_discount = math.exp(-inputs.dividend_yield * inputs.time_to_expiry_years)
+    return -div_discount * _norm_pdf(d1) * d2 / inputs.volatility
+
+
+def calculate_charm(inputs: BlackScholesInput) -> float:
+    """Hull canonical Charm = ∂Delta/∂T (rate of delta decay).
+
+    For call: q × e^(-qT) × N(d1) - e^(-qT) × N'(d1) × [2(r-q)T - d2×σ√T] / (2T×σ√T)
+    For put: -q × e^(-qT) × N(-d1) - e^(-qT) × N'(d1) × [2(r-q)T - d2×σ√T] / (2T×σ√T)
+
+    Returns per-year value. Caller divides by 365 for per-day convention.
+
+    Returns 0.0 si T<=0 o σ<=0 (degenerate, mirror calculate_greeks pattern).
+
+    ADR-011 D6 amendment Sprint 13 gex-b (math accuracy Hull canonical).
+    """
+    if inputs.time_to_expiry_years <= 0 or inputs.volatility <= 0:
+        return 0.0
+
+    d1, d2 = calculate_d1_d2(inputs)
+    T = inputs.time_to_expiry_years
+    sqrt_t = math.sqrt(T)
+    sigma_sqrt_t = inputs.volatility * sqrt_t
+    div_discount = math.exp(-inputs.dividend_yield * T)
+    is_call = inputs.option_type == "call"
+
+    # Second term common (both call/put)
+    second_term = div_discount * _norm_pdf(d1) * (
+        2 * (inputs.risk_free_rate - inputs.dividend_yield) * T - d2 * sigma_sqrt_t
+    ) / (2 * T * sigma_sqrt_t)
+
+    # First term differs by option type
+    if is_call:
+        first_term = inputs.dividend_yield * div_discount * _norm_cdf(d1)
+    else:
+        first_term = -inputs.dividend_yield * div_discount * _norm_cdf(-d1)
+
+    return first_term - second_term
+
+
 def implied_volatility(
     market_price: float,
     underlying_price: float,

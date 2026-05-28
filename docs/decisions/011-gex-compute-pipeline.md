@@ -81,9 +81,13 @@ Current ADR list: 001-009 + 013. ADR-010 (WebSocket Tier D) + ADR-012 (HERMES) r
 
 **Decisión**: Vanna + Charm computed via `shared_core.utils.greeks_calculator` extension Sprint 13 gex-b (NEW functions `calculate_vanna()` + `calculate_charm()` added to existing module, leveraging existing `calculate_d1_d2()` helper). Multi-agent `gex_compute.py` imports + aggregates per-strike Vanna/Charm weighted by OI.
 
-**Formulas canonical** (Black-Scholes derivatives):
-- Vanna = ∂Delta/∂IV = -gamma × d1 × sqrt(T) (per-strike, weighted by OI for aggregate)
-- Charm = ∂Delta/∂T = -gamma × [r - q + (d1 × σ) / (2 × sqrt(T))] (per-strike, weighted by OI)
+**Formulas canonical** (Hull canonical Black-Scholes derivatives, Sprint 13 gex-b math accuracy amendment):
+- Vanna = ∂Delta/∂σ = -e^(-qT) × N'(d1) × d2 / σ (per unit σ change, per-strike, weighted by OI × CONTRACT_MULTIPLIER)
+- Charm_call = q × e^(-qT) × N(d1) - e^(-qT) × N'(d1) × [2(r-q)T - d2×σ√T] / (2T×σ√T) (per-year)
+- Charm_put = -q × e^(-qT) × N(-d1) - e^(-qT) × N'(d1) × [2(r-q)T - d2×σ√T] / (2T×σ√T) (per-year)
+- Multi-agent layer divides Charm by 365 for per-day convention (mirror existing theta pattern).
+
+**Justificación D-α-7 amendment Sprint 13 gex-b math accuracy**: Original spec "-gamma × d1 × √T" (Sprint 13 adr-a) was simplified approximation, mathematically off vs Hull canonical (missing N'(d1) × e^(-qT) factors + incorrect dimensionality vs spot S). Pre-Write math verify catched accuracy bug F-r ant #4. Hull canonical implemented Sprint 13 gex-b via `shared_core.utils.greeks_calculator` NEW functions `calculate_vanna()` + `calculate_charm()` leveraging existing `calculate_d1_d2()` + `_norm_pdf()` + `_norm_cdf()` helpers. Finite-difference numerical validation D-ζ-7 (NO py_vollib dep).
 
 **Justificación D-ε-5 + D-ε-6 amendment Sprint 13 gex-a**: Vanna NOT en iv_surface schema → derived from existing fields (gamma + IV + DTE). Implementation location `shared_core.utils.greeks_calculator` (vs `multi_agent/risk/gex_compute.py`) preserves separation of concerns + reuses `calculate_d1_d2` helper. +50 LOC shared_core + ~30 LOC multi_agent integration (vs +80 LOC isolated multi_agent duplicating logic). D6 amendment inline S.13.gex-a per ADR-011 Propuesto modifiable pre-close-out.
 

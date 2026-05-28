@@ -6,6 +6,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Sequence
 
+from shared_core.utils.greeks_calculator import (
+    BlackScholesInput,
+    calculate_charm,
+    calculate_vanna,
+    time_to_expiry_years,
+)
+
 logger = logging.getLogger(__name__)
 
 # ── Constants (ADR-011 D4 + D5) ──────────────────────────────────────────
@@ -17,6 +24,10 @@ DTE_BUCKETS: list[tuple[int, int, str]] = [
     (31, 60, "31-60DTE"),
     (61, 99999, ">60DTE"),
 ]
+
+# ── Vanna/Charm defaults (ADR-011 D-ε-7, tech debt Sprint 14+) ──────────
+DEFAULT_RISK_FREE_RATE = 0.05  # FRED API tech debt Sprint 14+
+DEFAULT_DIVIDEND_YIELD = 0.0   # per-ticker config tech debt Sprint 14+
 
 
 # ── GexSnapshot dataclass (ADR-011 D8) ────────────────────────────────────
@@ -163,6 +174,64 @@ def compute_gamma_flip_point(
     return None
 
 
+def compute_vanna_charm_totals(
+    surface_rows: Sequence[dict],
+    spot: float,
+    snapshot_ts: datetime,
+    risk_free_rate: float = DEFAULT_RISK_FREE_RATE,
+    dividend_yield: float = DEFAULT_DIVIDEND_YIELD,
+) -> tuple[float, float]:
+    """Aggregate Vanna + Charm totals across strikes, weighted by OI.
+
+    ADR-011 D6 amendment via shared_core greeks_calculator extension.
+    Returns (vanna_total, charm_total):
+    - vanna_total: per-unit-σ × OI × CONTRACT_MULTIPLIER aggregate.
+    - charm_total: per-day × OI × CONTRACT_MULTIPLIER aggregate (Hull
+      formula returns per-year, divided by 365 here per D-γ-7).
+
+    F-r ant #1: option_type case translation iv_surface "CALL"/"PUT"
+    UPPERCASE → BlackScholesInput "call"/"put" LOWERCASE (D-δ-7).
+    F-r ant #3: T<=0 skip iteration defensive.
+    """
+    if spot <= 0:
+        return (0.0, 0.0)
+
+    vanna_total = 0.0
+    charm_total = 0.0
+
+    for row in surface_rows:
+        strike = float(row["strike"])
+        iv = float(row["iv"])
+        oi = int(row.get("open_interest", 0))
+        option_type = row["option_type"].lower()  # F-r ant #1 case translation (D-δ-7)
+        expiration = row["expiration"]
+        if isinstance(expiration, str):
+            expiration = date.fromisoformat(expiration)
+
+        T = time_to_expiry_years(snapshot_ts.date(), expiration)
+        if T <= 0 or iv <= 0:
+            continue  # skip degenerate (F-r ant #3 0DTE handling)
+
+        bs_input = BlackScholesInput(
+            underlying_price=spot,
+            strike=strike,
+            time_to_expiry_years=T,
+            volatility=iv,
+            option_type=option_type,
+            dividend_yield=dividend_yield,
+            risk_free_rate=risk_free_rate,
+        )
+
+        vanna_per_contract = calculate_vanna(bs_input)
+        charm_per_year = calculate_charm(bs_input)
+        charm_per_day = charm_per_year / 365.0  # D-γ-7 per-day convention
+
+        vanna_total += vanna_per_contract * oi * CONTRACT_MULTIPLIER
+        charm_total += charm_per_day * oi * CONTRACT_MULTIPLIER
+
+    return (vanna_total, charm_total)
+
+
 def build_gex_snapshot(
     surface_rows: Sequence[dict],
     underlying: str,
@@ -171,8 +240,8 @@ def build_gex_snapshot(
 ) -> GexSnapshot:
     """Build GexSnapshot from iv_surface rows + spot.
 
-    Sprint 13 gex-a scaffold: vanna_total + charm_total init 0.0.
-    Sprint 13 gex-b populates via shared_core greeks_calculator extension.
+    Sprint 13 gex-b: vanna_total + charm_total populated via Hull canonical
+    (shared_core greeks_calculator extension D-α-7).
     """
     if snapshot_ts is None:
         snapshot_ts = datetime.now(timezone.utc)
@@ -181,6 +250,9 @@ def build_gex_snapshot(
     gex_per_expiration = compute_gex_per_expiration(surface_rows, spot, snapshot_ts)
     gex_total = sum(gex_per_strike.values())
     gamma_flip_point = compute_gamma_flip_point(gex_per_strike)
+    vanna_total, charm_total = compute_vanna_charm_totals(
+        surface_rows, spot, snapshot_ts
+    )
 
     return GexSnapshot(
         underlying=underlying,
@@ -190,6 +262,6 @@ def build_gex_snapshot(
         gex_per_expiration=gex_per_expiration,
         gex_per_strike=gex_per_strike,
         gamma_flip_point=gamma_flip_point,
-        vanna_total=0.0,  # Sprint 13 gex-b populated (D-ε-6)
-        charm_total=0.0,  # Sprint 13 gex-b populated (D-ε-6)
+        vanna_total=vanna_total,  # Sprint 13 gex-b populated (D-α-7 Hull canonical)
+        charm_total=charm_total,  # Sprint 13 gex-b populated (D-α-7 Hull canonical)
     )
