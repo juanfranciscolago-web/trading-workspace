@@ -1,7 +1,7 @@
 # ADR-011: GEX/Vanna/Charm Compute Pipeline — Tier A Signal Generation
 
 **Fecha:** 2026-05-28
-**Estado:** Propuesto
+**Estado:** Aceptado (2026-05-28)
 **Contexto:** Sprint 13 LOCKED via S.13.plan-a (commit `ad04665`, 2026-05-28, scoring 3.65 weighted, strategic override numerical winner #9 Operator unblock 4.00 gap 0.35). Esta ADR define GEX + Vanna + Charm compute pipeline = Tier A dealer flow signal generation aggregating per-strike Greeks from `market.iv_surface` (ADR-006 producer S.7.surf-b ACEPTADO). ADR-011 NEW canonical per ADR-008 D6 #4 sequencing.
 
 ---
@@ -207,15 +207,76 @@ Defer to S.13.gex-a/b/c sub-blocks.
 
 ---
 
-## 9. Close-out (S.13.gex-c, pending)
+## 9. Close-out (S.13.gex-c, 2026-05-28)
 
-Sección a completar en S.13.gex-c. Estructura prevista (mirror ADR-005/006/007/009/013 §9):
-- §9.1 Sub-blocks delivered (adr-a + gex-a + gex-b + gex-c con commits + LOC + tests + sign-off dates).
-- §9.2 Rule #15 findings summary (F-r catches Sprint 13 cumulative).
-- §9.3 Tech debt registered (deferred Sprint 14+ items).
-- §9.4 Next steps Sprint 14+ (ADR-010 WebSocket + ADR-012 HERMES + Operator unblock #9 + tech debt remaining).
-- Status: Propuesto → Aceptado.
+### 9.1 Sub-blocks delivered
 
----
+| Sub-block | Commit | LOC | Tests | Description |
+|-----------|--------|-----|-------|-------------|
+| S.13.plan-a | `ad04665` | +124 doc | 0 | Sprint 13 priority analysis + GEX LOCKED (scoring 3.65 weighted, strategic override #9 Operator unblock 4.00 gap 0.35) |
+| S.13.adr-a | `1298177` | +217 doc | 0 | ADR-011 design plan firmado D1-D10 (NEW Propuesto, 9 sections mirror ADR-013) |
+| S.13.gex-a | `fd37555` | +398/-3 | +17 | GEX core compute pipeline (4 aggregation levels + GexSnapshot scaffold) + ADR-011 D6 amendment #1 (shared_core extension D-ε-6) |
+| S.13.gex-b | `6135607` | +325/-14 | +13 | Vanna/Charm Hull canonical (greeks_calculator extension) + ADR-011 D6 amendment #2 math accuracy + finite-diff benchmarks (D-α-7 CRITICAL catch pre-Write) |
+| S.13.gex-c | _this commit_ | ~+280 | +5 | §9 close-out + 5 integration tests + DAILY_LOG amend + ADR-011 Aceptado |
 
-> **Próximo sub-bloque**: S.13.gex-a (GEX core compute pipeline + 4 aggregation levels + ~10-15 unit tests). Inicia tras Juan sign-off plan firmado actual.
+**Sprint 13 totals**: 5 commits + ~1,344 LOC (doc + code + tests) + 35 NEW tests (gex-a 17 + gex-b 13 + gex-c 5).
+
+### 9.2 Findings rule #15 summary
+
+**12 F-r catches Sprint 13 cumulative** (record alto vs Sprint 11 record 18 + Sprint 12 record 8):
+
+| F-r # | Sub-block | Type | Resolution |
+|-------|-----------|------|------------|
+| F-r ant #1-#7 | gex-a (catalogued) | Signature divergence cross-module + 0DTE + spot=0 + iv_surface populated | All inline mitigated pre-Write |
+| F-r ant #1-#5 | gex-b (catalogued) | Case translation + py_vollib NO + 0DTE + math accuracy + test rename | All inline mitigated pre-Write |
+| F-r28 | gex-b (post-Write) | OTM call Vanna sign convention (d2<0 → positive) | Test expectation corrected 1 iteration |
+| F-r29 | gex-b (post-Write) | Charm Hull elapsed-time convention sign | Numerical formula sign flipped 1 iteration |
+
+**Patterns observed Sprint 13**:
+- Pre-recolección math verify CATCHED CRITICAL accuracy bug pre-Write (D-α-7 ADR-011 D6 spec was simplified approximation). Catched pre-Write = exactly value sustained Camino 2 protocol 6+ sprints.
+- ADR Propuesto modifiable inline pattern reusable (2x D6 amendments same sprint sin re-litigation).
+- Cross-package work (multi-agent + shared_core) yields concentrated F-r catches mirror atlas-b Sprint 11 lesson.
+- Hand-computed + finite-difference numerical benchmark validation (NO py_vollib dep, pure stdlib preserved) — math accuracy provable via dual independent methods.
+
+**Tech debt resolved Sprint 13**: 0 (Sprint 13 was NEW feature delivery, NOT debt resolution sprint).
+
+**Tech debt NEW Sprint 13** (deferred §9.3):
+- DEFAULT_RISK_FREE_RATE=0.05 hardcoded constant (vs FRED API real-time fetch).
+- DEFAULT_DIVIDEND_YIELD=0.0 hardcoded constant (vs per-ticker config).
+- ATHENA prompt integration deferred Sprint 14+ (per D-ζ-5 + D-γ-4 sustained).
+- iv_surface freshness verify deferred (R1 mocked tests, operator pre-deploy + telemetry-c unlocks real-DB validation).
+
+### 9.3 Tech debt registered
+
+**NEW Sprint 13** (Sprint 14+ candidates):
+
+| # | Item | Source | Trigger |
+|---|------|--------|---------|
+| 1 | DEFAULT_RISK_FREE_RATE FRED API integration | gex-b D-ε-7 | Sprint 14+ data accuracy concern |
+| 2 | DEFAULT_DIVIDEND_YIELD per-ticker config | gex-b D-ε-7 | Sprint 14+ data accuracy concern |
+| 3 | ATHENA prompt integration GexSnapshot consumer | adr-a D-ζ-5 + plan-a D-γ-4 | Post telemetry-c data signal Sprint 14+ |
+| 4 | iv_surface real-DB freshness verify | adr-a R1 | Operator pre-deploy + Track A telemetry-c re-activation |
+| 5 | CachedGexBuilder pattern (mirror CachedSnapshotBuilder) | Q2 deferred | Sprint 14+ performance optimization trigger |
+
+**Inherited tech debt (Sprint 11 + Sprint 12, NOT addressed Sprint 13)**:
+- Greeks D-η cross-source (ADR-013 §9.3 #1) — UNRESOLVED.
+- PnL history D-θ table (ADR-013 §9.3 #2) — UNRESOLVED.
+- OCC ticker parser D-ι-A (ADR-013 §9.3 #3) — UNRESOLVED.
+- portfolio_beta D-κ cross-source (ADR-013 §9.3 #4) — UNRESOLVED.
+- SchwabClient 4 instances F-r16 cross-cutting (ADR-013 §9.3 #6) — UNRESOLVED.
+- Telemetry-c real close-out memo (S.12.telemetry-c-deferred §4 4 conditions) — DEFERRED observation window.
+
+### 9.4 Next steps Sprint 14+ (TENTATIVE)
+
+**Rule #15 strict**: Sprint 14 priority RE-VALIDATION required. NO pre-commit Sprint 14 priority.
+
+**Caveat D-γ-3 sustained**: Track A telemetry-c observation window OPEN parallel. Cuando data exists (per telemetry-c-deferred §4 4 conditions met), Sprint 14+ re-validation MAY adjust priorities retrospectively per S.12.plan-a §7 mandate.
+
+**Sprint 14+ candidates ranked Sprint 13 (3.05-4.00 range)**:
+- #9 Operator unblock sprint (numerical winner Sprint 13 deferred 4.00 weighted) — accelerates Track A telemetry-c re-activation + validates fail-fast contract D-ν live.
+- #8 SchwabClient F-r16 cross-cutting (3.25 third-place Sprint 13) — RESOLVES ADR-013 §9.3 #6 + ADR-005 §9.3 #1 reaffirmed.
+- #1 ADR-010 Schwab WebSocket part 1 (3.05 fourth-place Sprint 13) — Tier D infra HERMES Sprint 14+ dependency multi-sprint pattern.
+- Sprint 11 tech debt unresolved (Greeks D-η + portfolio_beta D-κ + PnL D-θ + SchwabClient F-r16).
+- #3 ADR-012 HERMES Sprint 14-16+ canonical timeline (depends ADR-010 ready first).
+
+**Re-score per rule #15 Sprint 14 plan-a**: pre-recolección outputs fresh + scoring matrix N candidates × 6 dimensions weighted + LOCK explicit operator sign-off. NO carry-over assumptions.

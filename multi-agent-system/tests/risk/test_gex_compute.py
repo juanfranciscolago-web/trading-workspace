@@ -246,3 +246,91 @@ class TestIvSurfaceIntegration:
         mock_repo.get_surface_for_ticker.assert_called_once_with("SPY", ts)
         assert snapshot.underlying == "SPY"
         assert len(snapshot.gex_per_strike) >= 1
+
+
+class TestEndToEndIntegration:
+    """End-to-end integration tests Sprint 13 gex-c (ADR-011 D7)."""
+
+    def test_realistic_multi_strike_multi_expiration(self):
+        """20-strike × 3-expiration synthetic distribution → GexSnapshot shape."""
+        ts = datetime(2026, 5, 28, tzinfo=timezone.utc)
+        spot = 100.0
+        expirations = [date(2026, 6, 5), date(2026, 6, 27), date(2026, 8, 15)]
+        rows = []
+        for exp in expirations:
+            for strike_offset in range(-10, 11):
+                strike = spot + strike_offset
+                gamma = 0.05 * (1 - abs(strike_offset) / 15.0)  # ATM peak distribution
+                for opt_type in ["CALL", "PUT"]:
+                    rows.append(_row(strike, gamma, 500, opt_type, expiration=exp))
+
+        snapshot = build_gex_snapshot(rows, "SPY", spot, snapshot_ts=ts)
+
+        assert snapshot.underlying == "SPY"
+        assert snapshot.spot == spot
+        assert len(snapshot.gex_per_strike) >= 15
+        assert len(snapshot.gex_per_expiration) == 5  # 5 DTE buckets defined
+        # Sum buckets should equal gex_total (within float precision)
+        assert abs(sum(snapshot.gex_per_expiration.values()) - snapshot.gex_total) < 1.0
+
+    def test_hand_computed_atm_call_benchmark(self):
+        """ATM 30-DTE call known input → hand-computed gex_total within 5% tolerance.
+
+        Hull textbook reference: SPY @ $100, ATM call $100 strike, 30-DTE, σ=20%, OI=10000.
+        gamma ≈ 0.06 (approximate ATM 30-DTE).
+        Expected GEX_per_strike: 1 × 0.06 × 10000 × 100² × 0.01 × 100 = 600,000.
+        """
+        ts = datetime(2026, 5, 28, tzinfo=timezone.utc)
+        rows = [_row(100.0, 0.06, 10000, "CALL", expiration=date(2026, 6, 27))]
+        snapshot = build_gex_snapshot(rows, "SPY", 100.0, snapshot_ts=ts)
+
+        expected = 0.06 * 10000 * (100.0 ** 2) * 0.01 * CONTRACT_MULTIPLIER
+        tolerance = expected * 0.05
+        assert abs(snapshot.gex_total - expected) < tolerance
+
+    def test_empty_surface_degenerate(self):
+        """Empty rows → snapshot zeros + gamma_flip_point None."""
+        ts = datetime(2026, 5, 28, tzinfo=timezone.utc)
+        snapshot = build_gex_snapshot([], "SPY", 100.0, snapshot_ts=ts)
+
+        assert snapshot.gex_total == 0.0
+        assert snapshot.gex_per_strike == {}
+        assert snapshot.gamma_flip_point is None
+        assert snapshot.vanna_total == 0.0
+        assert snapshot.charm_total == 0.0
+
+    def test_extreme_iv_handling(self):
+        """IV=5% (low) y IV=100% (high) → both produce non-degenerate non-zero values."""
+        ts = datetime(2026, 5, 28, tzinfo=timezone.utc)
+        rows_low = [_row(100.0, 0.05, 1000, "CALL", expiration=date(2026, 6, 27), iv=0.05)]
+        rows_high = [_row(100.0, 0.05, 1000, "CALL", expiration=date(2026, 6, 27), iv=1.00)]
+
+        snap_low = build_gex_snapshot(rows_low, "SPY", 100.0, snapshot_ts=ts)
+        snap_high = build_gex_snapshot(rows_high, "SPY", 100.0, snapshot_ts=ts)
+
+        # Both GEX values should be computed (gamma × OI × spot²)
+        assert snap_low.gex_total != 0.0
+        assert snap_high.gex_total != 0.0
+        # Vanna/Charm should differ based on IV input
+        assert (snap_low.vanna_total != snap_high.vanna_total
+                or snap_low.charm_total != snap_high.charm_total)
+
+    def test_dte_boundary_edge_cases(self):
+        """DTE boundary strikes (7/30/60) → correct bucket assignment (D-β-8 Alternativa A)."""
+        ts = datetime(2026, 5, 28, tzinfo=timezone.utc)
+        # 7-DTE → "1-7DTE", 8-DTE → "8-30DTE", 30-DTE → "8-30DTE",
+        # 31-DTE → "31-60DTE", 60-DTE → "31-60DTE", 61-DTE → ">60DTE"
+        rows = [
+            _row(100.0, 0.05, 1000, "CALL", expiration=date(2026, 6, 4)),   # 7 DTE
+            _row(100.0, 0.05, 1000, "CALL", expiration=date(2026, 6, 5)),   # 8 DTE
+            _row(100.0, 0.05, 1000, "CALL", expiration=date(2026, 6, 27)),  # 30 DTE
+            _row(100.0, 0.05, 1000, "CALL", expiration=date(2026, 6, 28)),  # 31 DTE
+            _row(100.0, 0.05, 1000, "CALL", expiration=date(2026, 7, 27)),  # 60 DTE
+            _row(100.0, 0.05, 1000, "CALL", expiration=date(2026, 7, 28)),  # 61 DTE
+        ]
+        snapshot = build_gex_snapshot(rows, "SPY", 100.0, snapshot_ts=ts)
+
+        assert snapshot.gex_per_expiration["1-7DTE"] > 0    # 7-DTE row
+        assert snapshot.gex_per_expiration["8-30DTE"] > 0   # 8-DTE + 30-DTE
+        assert snapshot.gex_per_expiration["31-60DTE"] > 0  # 31-DTE + 60-DTE
+        assert snapshot.gex_per_expiration[">60DTE"] > 0    # 61-DTE
