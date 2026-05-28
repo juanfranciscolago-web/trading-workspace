@@ -174,13 +174,13 @@ ADR number: **NO new ADR Sprint 12**.
 
 ## 6. Sub-blocks plan Sprint 12 (5 sub-blocks)
 
-| Sub-block | Phase | Scope | Estimate |
-|-----------|-------|-------|----------|
-| S.12.plan-a | THIS commit | Priority analysis | ~200 LOC doc |
-| S.12.protocol-a | Phase 1 (Day 1-2) | SupportsBuild Protocol + CachedSnapshotBuilder refactor + tests | ~75 LOC code + 5 tests |
-| S.12.telemetry-a | Phase 2 (Day 3) | Telemetry setup memo + operator doc §11 ext | ~150 LOC doc |
-| S.12.telemetry-b | Phase 2 (Day 4-5) | Structured logs + metrics scaffold | ~200 LOC code |
-| S.12.telemetry-c | Phase 2 (ongoing) | Observation report + close-out | ~200 LOC doc |
+| Sub-block | Phase | Scope | Estimate | Status |
+|-----------|-------|-------|----------|--------|
+| S.12.plan-a | THIS commit | Priority analysis | ~200 LOC doc | ✓ `af0ee36` |
+| S.12.protocol-a | Phase 1 (Day 1-2) | SupportsBuild Protocol + CachedSnapshotBuilder refactor + tests | ~75 LOC code + 5 tests | ✓ `e76e879` |
+| S.12.telemetry-a | Phase 2 (Day 3) | Telemetry setup memo + operator doc §11 ext | ~150 LOC doc | ✓ `974f6f3` |
+| S.12.telemetry-b | Phase 2 (Day 4-5) | Structured logs + metrics scaffold | ~200 LOC code | ✓ `a16a413` |
+| S.12.telemetry-c | Phase 2 (ongoing) | Observation report + close-out | ~200 LOC doc | DEFERRED (gate bloqueado, memo `sprint-12-telemetry-c-deferred.md`) |
 
 **Total Sprint 12 estimate**: ~825 LOC code+tests+doc + ~5 tests + ongoing observation 4-8 semanas.
 
