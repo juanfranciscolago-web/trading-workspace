@@ -72,6 +72,33 @@ def _build_schwab_client(settings_obj: Settings):
     return SchwabClient.from_gcp(account_id=account_id)
 
 
+def _build_schwab_streamer(settings_obj: Settings, schwab_client):
+    """Singleton SchwabStreamer factory (ADR-010 D4 Sprint 15 ws-a).
+
+    Lazy conditional creation mirror F-r16 SchwabClient pattern.
+    Returns None if USE_SCHWAB_WEBSOCKET=False OR schwab_client=None
+    (streamer requires shared SchwabClient for auth via access_token).
+
+    Args:
+        settings_obj: Settings instance with USE_SCHWAB_WEBSOCKET flag.
+        schwab_client: shared SchwabClient instance (per F-r16 singleton).
+
+    Returns:
+        SchwabStreamer instance if flag True + client viable; else None.
+    """
+    if not settings_obj.USE_SCHWAB_WEBSOCKET:
+        return None
+    if schwab_client is None:
+        logger.warning(
+            "USE_SCHWAB_WEBSOCKET=True but schwab_client is None — "
+            "streamer requires SchwabClient instance for auth. Returning None."
+        )
+        return None
+
+    from shared_core.brokers.schwab_streamer import SchwabStreamer
+    return SchwabStreamer(schwab_client=schwab_client)
+
+
 def _select_data_layer(
     settings_obj: Settings,
     iv_history_repo: IvHistoryRepository | None = None,
@@ -265,6 +292,15 @@ async def _lifespan(app: FastAPI):
             "✓ SchwabClient singleton ready (account_id=%s)",
             settings.SCHWAB_ACCOUNT_ID or "auto-discovery",
         )
+    # ADR-010 D4 (Sprint 15 ws-a): SchwabStreamer singleton DI lifespan.
+    app.state.schwab_streamer = _build_schwab_streamer(settings, app.state.schwab_client)
+    if app.state.schwab_streamer is not None:
+        try:
+            await app.state.schwab_streamer.connect()
+            logger.info("✓ SchwabStreamer singleton ready + connected")
+        except Exception as e:
+            logger.error("SchwabStreamer connect failed: %s", e)
+            app.state.schwab_streamer = None  # graceful degradation Phase 1
     app.state.snapshot_builder = _build_snapshot_builder(
         settings, pool, schwab_client=app.state.schwab_client
     )
@@ -469,6 +505,13 @@ async def _lifespan(app: FastAPI):
     yield
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
+
+    # ADR-010 D4 (Sprint 15 ws-a): SchwabStreamer cleanup
+    if getattr(app.state, "schwab_streamer", None) is not None:
+        try:
+            await app.state.schwab_streamer.disconnect()
+        except Exception:
+            logger.exception("SchwabStreamer disconnect error (continuing)")
 
     if tg_app is not None:
         try:

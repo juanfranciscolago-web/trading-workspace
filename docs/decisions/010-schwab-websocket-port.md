@@ -107,6 +107,22 @@ Current ADR list: 001-009 + 011 + 013 (10 files). NO 012 (HERMES Sprint 16-18+ d
 
 **Justificación**: Eolo precedent verified (`eolo-options/stream/options_stream.py` `helpers.get_access_token()` + REST → WebSocket bridge pattern). Single OAuth source of truth. D-δ-16 firmado.
 
+**🚨 Amendment Sprint 15 ws-a (this commit, mirror ADR-011 D6 amendment Sprint 13 gex-a precedent)**:
+
+Pre-implementation Eolo source files verbatim review (S.15.ws-a PARTE 1 pre-recolección) catched URL/method INCORRECT vs Schwab API current:
+
+**Original D3 (S.15.adr-a 15a027d)**:
+- `POST /v1/userPreference`
+
+**Corrected D3 (this commit, D-γ-17)**:
+- `GET /trader/v1/userPreference` (per Eolo `eolo-options/stream/options_stream.py` `_get_streamer_info()` line 78 verbatim).
+
+**Rationale**: Schwab API endpoint canonical Trader v1 namespace (NOT v1 deprecated). HTTP method GET (NOT POST, idempotent read user preferences). Pattern verified Eolo precedent `eolo-options/stream/options_stream.py` + `Bot-v1.2/stream.py` 2 source files convergent.
+
+**Impact**: SchwabStreamer `_fetch_user_preferences()` method implements `GET /trader/v1/userPreference` (via SchwabClient HTTP wrapper). NO breaking change Phase 1 design (auth + connection + LOGIN sustained).
+
+**Pattern emergent**: pre-implementation Eolo source files verbatim review = CRITICAL F-r catches ADR design corrections (mirror Sprint 13 ADR-011 D6 amendment 2x Sprint 13 gex-a precedent + Sprint 11 atlas-d cross-sprint gap catched material Sprint 14 operator-a).
+
 ### D4. Connection lifecycle: lifespan singleton mirror F-r16
 
 **Decisión**: SchwabStreamer lifespan singleton pattern `app.state.schwab_streamer` mirror Sprint 14 F-r16 (`app.state.schwab_client` commits `0c8c59f` + `119a077`).

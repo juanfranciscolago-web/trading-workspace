@@ -103,6 +103,13 @@ class Settings(BaseSettings):
     # Eolo bots' subaccount within same Schwab parent account.
     SCHWAB_ACCOUNT_ID: str = ""
 
+    # ADR-010 D4 (Sprint 15 ws-a): Schwab WebSocket streamer flag.
+    # False (default): NO streamer instantiated lifespan.
+    # True: app.state.schwab_streamer = SchwabStreamer instance + lifespan
+    #       connect/disconnect. Requires shared SchwabClient instance
+    #       (USE_SCHWAB_DATA_LAYER=True or USE_LIVE_PORTFOLIO=True).
+    USE_SCHWAB_WEBSOCKET: bool = False
+
     # ── HIGH priority: fail-fast at startup (raise = process cannot start) ───
 
     @field_validator("DATABASE_URL")
