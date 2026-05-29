@@ -31,11 +31,53 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _build_schwab_client(settings_obj: Settings):
+    """Singleton SchwabClient factory (F-r16 resolution Sprint 14 f-r16-a).
+
+    Returns single SchwabClient instance shared across consumers
+    (SchwabDataLayer + LiveSnapshotBuilder + IvHistoryWorker + OhlcvWorker).
+    Resolves ADR-013 §9.3 #6 + ADR-005 §9.3 #1 reaffirmed cross-cutting
+    tech debt: 4 SchwabClient instances → 1 singleton.
+
+    Conditional lazy creation: returns None if NO consumer needs SchwabClient
+    (full synthetic mode + workers disabled — workers conditional on
+    USE_SCHWAB_DATA_LAYER per current lifespan logic).
+
+    account_id strategy: settings.SCHWAB_ACCOUNT_ID if USE_LIVE_PORTFOLIO
+    else None (auto-discovery for non-portfolio market data uses).
+    Fail-fast contract D-ν preserved (per ADR-013 D-ο Sprint 11 atlas-e):
+    USE_LIVE_PORTFOLIO=True + SCHWAB_ACCOUNT_ID="" raises ValueError.
+    """
+    needs_schwab = (
+        settings_obj.USE_SCHWAB_DATA_LAYER
+        or settings_obj.USE_LIVE_PORTFOLIO
+    )
+    if not needs_schwab:
+        return None
+
+    if settings_obj.USE_LIVE_PORTFOLIO and not settings_obj.SCHWAB_ACCOUNT_ID:
+        raise ValueError(
+            "USE_LIVE_PORTFOLIO=True requires SCHWAB_ACCOUNT_ID explicit "
+            "(ADR-013 D9 subaccount isolation). Auto-discovery would "
+            "silently use Eolo's subaccount, causing position conflation. "
+            "Set SCHWAB_ACCOUNT_ID env var to your multi-agent paper "
+            "subaccount number, or set USE_LIVE_PORTFOLIO=False."
+        )
+
+    from shared_core.brokers.schwab_client import SchwabClient
+
+    account_id = (
+        settings_obj.SCHWAB_ACCOUNT_ID if settings_obj.USE_LIVE_PORTFOLIO else None
+    )
+    return SchwabClient.from_gcp(account_id=account_id)
+
+
 def _select_data_layer(
     settings_obj: Settings,
     iv_history_repo: IvHistoryRepository | None = None,
     iv_surface_repo: IvSurfaceRepository | None = None,
     ohlcv_repo: OhlcvRepository | None = None,
+    schwab_client=None,
 ) -> DataLayer:
     """Construct the DataLayer per USE_SCHWAB_DATA_LAYER flag.
 
@@ -70,7 +112,10 @@ def _select_data_layer(
         from shared_core.brokers.schwab_client import SchwabClient
 
         try:
-            schwab_client = SchwabClient.from_gcp()
+            # F-r16 (Sprint 14 f-r16-a): use passed singleton if provided;
+            # else legacy from_gcp (tests + backward compat preserved).
+            if schwab_client is None:
+                schwab_client = SchwabClient.from_gcp()
             data_layer = SchwabDataLayer(
                 schwab_client,
                 iv_history_repo=iv_history_repo,
@@ -101,7 +146,7 @@ def _select_data_layer(
         return data_layer
 
 
-def _build_snapshot_builder(settings_obj: Settings, pool):
+def _build_snapshot_builder(settings_obj: Settings, pool, schwab_client=None):
     """Construct snapshot builder per USE_LIVE_PORTFOLIO flag (ADR-013 D6 + D7).
 
     USE_LIVE_PORTFOLIO=False (default) → DB-backed SnapshotBuilder + TTL 5s.
@@ -148,9 +193,12 @@ def _build_snapshot_builder(settings_obj: Settings, pool):
         from shared_core.brokers.schwab_client import SchwabClient
 
         try:
-            schwab_client = SchwabClient.from_gcp(
-                account_id=settings_obj.SCHWAB_ACCOUNT_ID,
-            )
+            # F-r16 (Sprint 14 f-r16-a): use passed singleton if provided;
+            # else legacy from_gcp (tests + backward compat preserved).
+            if schwab_client is None:
+                schwab_client = SchwabClient.from_gcp(
+                    account_id=settings_obj.SCHWAB_ACCOUNT_ID,
+                )
             live_builder = LiveSnapshotBuilder(schwab_client)
             logger.info(
                 "ATLAS LiveSnapshotBuilder active (account_id=%s, TTL=30s)",
@@ -209,7 +257,17 @@ async def _lifespan(app: FastAPI):
     app.state.pool = pool
     app.state.limits = load_limits()
     app.state.buckets = load_buckets()
-    app.state.snapshot_builder = _build_snapshot_builder(settings, pool)
+    # F-r16 (Sprint 14 f-r16-a): SchwabClient singleton DI lifespan.
+    # 4 instances → 1 singleton (resolves ADR-013 §9.3 #6 + ADR-005 §9.3 #1).
+    app.state.schwab_client = _build_schwab_client(settings)
+    if app.state.schwab_client is not None:
+        logger.info(
+            "✓ SchwabClient singleton ready (account_id=%s)",
+            settings.SCHWAB_ACCOUNT_ID or "auto-discovery",
+        )
+    app.state.snapshot_builder = _build_snapshot_builder(
+        settings, pool, schwab_client=app.state.schwab_client
+    )
     app.state.cost_repo = LLMCostRepository(pool)
     app.state.startup_time = datetime.now(timezone.utc)
     logger.info("✓ DB pool ready (min=%d max=%d)", settings.DB_POOL_MIN, settings.DB_POOL_MAX)
@@ -267,6 +325,7 @@ async def _lifespan(app: FastAPI):
         iv_history_repo=iv_history_repo,
         iv_surface_repo=iv_surface_repo,
         ohlcv_repo=ohlcv_repo,
+        schwab_client=app.state.schwab_client,
     )
     logger.info(
         "✓ ATHENA dependencies ready: claude_router (config=%s), data_layer=%s",
@@ -350,17 +409,14 @@ async def _lifespan(app: FastAPI):
 
     # ── IvHistoryWorker (Sprint 6 S.6.iv-c) ─────────────────────────────────
     # Conditional: only when USE_SCHWAB_DATA_LAYER active (D-η, fails closed).
-    # Worker construye su propio SchwabClient (Opción C). Doble construcción
-    # de SchwabClient accepted como tech debt — registered ADR-005 §9.3
-    # close-out S.6.iv-f. iv_history_repo IS shared with SchwabDataLayer
-    # (constructed above line 140 + stored en app.state.iv_history_repo).
+    # F-r16 (Sprint 14 f-r16-a): worker uses singleton app.state.schwab_client
+    # (resolves doble construcción tech debt ADR-005 §9.3 #1 + ADR-013 §9.3 #6).
     iv_worker = None
     iv_task = None
     if settings.USE_SCHWAB_DATA_LAYER and isinstance(app.state.data_layer, SchwabDataLayer):
-        iv_schwab_client = SchwabClient.from_gcp()
         iv_worker = IvHistoryWorker(
             repo=app.state.iv_history_repo,
-            schwab_client=iv_schwab_client,
+            schwab_client=app.state.schwab_client,
             surface_repo=app.state.iv_surface_repo,
         )
         iv_task = asyncio.create_task(iv_worker.run())
@@ -373,17 +429,15 @@ async def _lifespan(app: FastAPI):
 
     # ── OhlcvWorker (Sprint 9 S.9.ohl-b, ADR-007 D3) ────────────────────────
     # Stagger from IvHistoryWorker 21:15 UTC → 21:30 UTC (F-r7 mitigation).
-    # Mirror IvHistoryWorker pattern: dedicated SchwabClient (tech debt doble
-    # construcción accepted ADR-005 §9.3). OhlcvRepository is shared con
-    # SchwabDataLayer (Sprint 10 S.10.cons-d) via app.state.ohlcv_repo
-    # constructed above (line ~180).
+    # F-r16 (Sprint 14 f-r16-a): worker uses singleton app.state.schwab_client
+    # (resolves doble construcción tech debt ADR-005 §9.3 #1 + ADR-013 §9.3 #6).
+    # OhlcvRepository shared con SchwabDataLayer via app.state.ohlcv_repo.
     ohlcv_worker = None
     ohlcv_task = None
     if settings.USE_SCHWAB_DATA_LAYER and isinstance(app.state.data_layer, SchwabDataLayer):
-        ohlcv_schwab_client = SchwabClient.from_gcp()
         ohlcv_worker = OhlcvWorker(
             repo=app.state.ohlcv_repo,
-            schwab_client=ohlcv_schwab_client,
+            schwab_client=app.state.schwab_client,
         )
         ohlcv_task = asyncio.create_task(ohlcv_worker.run())
         app.state.ohlcv_worker = ohlcv_worker
