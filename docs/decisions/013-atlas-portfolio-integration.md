@@ -332,6 +332,13 @@ decay as patterns proven (atlas-c 0).
    (_select_data_layer + IvHistoryWorker + OhlcvWorker + LiveSnapshotBuilder).
    Already registered ADR-005 §9.3 #1. Reaffirmed Sprint 11.
 
+   **✓ RESOLVED Sprint 14 Bundle B1** (commits `0c8c59f` S.14.f-r16-a +
+   `119a077` S.14.f-r16-b): 4 instances → 1 singleton via
+   `app.state.schwab_client` lifespan pattern + `_build_schwab_client(settings)`
+   helper conditional + 9 NEW tests coverage (TestBuildSchwabClient 7 +
+   TestHelperBackwardCompat 2). Fail-fast contract D-ν preserved. See
+   `docs/decisions/sprint-14-bundle-b1-deferred.md` close-out memo.
+
 **Inherited tech debt resolved Sprint 11**: 0 (Sprint 11 standalone ADR-013
 NEW, no cross-sprint dependencies resolved).
 

@@ -128,14 +128,14 @@ Sprint 14 Bundle B1 outputs:
 
 ## 6. Sprint 14 expected sub-blocks plan (~6 sub-blocks)
 
-| Sub-block | Phase | Scope | Estimate |
-|-----------|-------|-------|----------|
-| S.14.plan-a | THIS commit | Priority analysis + Bundle B1 LOCK | ~250 LOC doc |
-| S.14.operator-a | Day 1 | Operator pre-deploy 5 actions §10.3 + initial runs setup + memo | ~50 LOC doc + portal actions |
-| S.14.operator-b | Day 2 (parallel start) | Initial production runs verification + first telemetry events captured + observation log | ~80 LOC doc |
-| S.14.f-r16-a | Day 2-3 | SchwabClient DI lifespan singleton refactor design + initial impl | ~150 LOC code |
-| S.14.f-r16-b | Day 3-4 | F-r16 implementation completion + 8-12 NEW tests + cross-package verify | ~150 LOC code + 8-12 tests |
-| S.14.bundle-c | Day 4-5 | Bundle close-out + ADR-005 + ADR-013 §9.3 amendments + DAILY_LOG | ~150 LOC doc + ADR amendments |
+| Sub-block | Phase | Scope | Estimate | Status |
+|-----------|-------|-------|----------|--------|
+| S.14.plan-a | THIS commit | Priority analysis + Bundle B1 LOCK | ~250 LOC doc | ✓ `5536940` |
+| S.14.operator-a | Day 1 | Operator pre-deploy 5 actions §10.3 + initial runs setup + memo | ~50 LOC doc + portal actions | ✓ `8997fba` |
+| S.14.operator-b | Day 2 (parallel start) | Initial production runs verification + first telemetry events captured + observation log | ~80 LOC doc | DEFERRED (Track A operator portal action pending) |
+| S.14.f-r16-a | Day 2-3 | SchwabClient DI lifespan singleton refactor design + initial impl | ~150 LOC code | ✓ `0c8c59f` |
+| S.14.f-r16-b | Day 3-4 | F-r16 implementation completion + 8-12 NEW tests + cross-package verify | ~150 LOC code + 8-12 tests | ✓ `119a077` |
+| S.14.bundle-c | Day 4-5 | Bundle close-out + ADR-005 + ADR-013 §9.3 amendments + DAILY_LOG | ~150 LOC doc + ADR amendments | ✓ _this commit_ |
 
 **Total estimate Sprint 14**: ~830 LOC doc+code+tests + ~8-12 NEW tests + operator portal actions.
 

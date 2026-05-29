@@ -320,6 +320,8 @@ Canonical numbered list — operator doc `docs/operator/schwab-setup.md` §8 ref
 
 1. **SchwabClient doble construcción**: lifespan path (S.5.6f construye for SchwabDataLayer) + worker path (S.6.iv-c construye for IvHistoryWorker). Each calls `SchwabClient.from_gcp()` independently. Trivial cost (~2s GCP call once per process startup). Refactor a single source of truth Sprint 7+ si performance/scaling pain emerges. Opción C tech debt registered S.6.iv-c.
 
+   **✓ RESOLVED Sprint 14 Bundle B1** (commits `0c8c59f` S.14.f-r16-a + `119a077` S.14.f-r16-b): cluster-resolved con ADR-013 §9.3 #6 (F-r16 cross-cutting reaffirmed Sprint 11 atlas-e expanded to 4 instances). Singleton DI lifespan pattern `app.state.schwab_client` + `_build_schwab_client(settings)` helper + 9 NEW tests coverage. See ADR-013 §9.3 #6 + `docs/decisions/sprint-14-bundle-b1-deferred.md` close-out memo.
+
 2. **`market.iv_surface` populating**: hypertable EXISTS desde V007 pero NO producer/consumer wired. Future ADR-006 candidate for full IV surface persistence (per-strike + per-expiration IV history, separate from `market.iv_history` daily ATM scalar).
 
 3. **`market.ohlcv` populating**: hypertable exists desde V007 pero NO producer/consumer wired. Sprint 7+ candidate cuando HERMES tactical agent lands con intraday data needs.
